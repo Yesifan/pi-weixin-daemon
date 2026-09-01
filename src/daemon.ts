@@ -1,4 +1,7 @@
+import { PiRuntime } from "./agent/runtime.js";
 import type { Logger } from "./util/logger.js";
+import { loadWeixinAccount } from "./weixin/auth/accounts.js";
+import { ILinkWeixinTransport } from "./weixin/transport.js";
 
 export interface DaemonOptions {
   /** Project working directory. One daemon = one project. */
@@ -11,15 +14,15 @@ export interface DaemonOptions {
 /**
  * pi-weixin-daemon composition root.
  *
- * Owns: weixin monitors (one per account) -> bridge (busy state, TurnContext,
+ * Owns: weixin transports (one per account) -> bridge (busy state, TurnContext,
  * command routing) -> Pi AgentSessionRuntime (bound to `cwd`).
  *
  * Milestone roadmap:
- *  M1: lifecycle skeleton (start/stop + signals)
- *  M2: Pi SDK runtime
- *  M3: runtime weixin extension (weixin_send_file)
- *  M4: Tencent QR login / account storage
- *  M5: monitors (getUpdates long-poll)
+ *  M1: lifecycle skeleton (start/stop + signals)            [done]
+ *  M2: Pi SDK runtime                                       [done]
+ *  M3: runtime weixin extension (weixin_send_file)          [done]
+ *  M4: Tencent QR login / account storage                   [done]
+ *  M5: monitors (getUpdates long-poll)                      [this]
  *  M6: text bridge (Weixin <-> Pi <-> Weixin)
  *  M7: typing / context_token
  *  M8: media
@@ -31,6 +34,8 @@ export class Daemon {
   private keepAlive: NodeJS.Timeout | undefined;
   private readonly shutdownPromise: Promise<void>;
   private resolveShutdown!: () => void;
+  private runtime: PiRuntime | undefined;
+  private transports: ILinkWeixinTransport[] = [];
 
   constructor(private readonly opts: DaemonOptions) {
     this.shutdownPromise = new Promise((resolve) => {
@@ -51,13 +56,37 @@ export class Daemon {
     logger.info({ cwd, accounts }, "daemon starting");
 
     // Keep the event loop alive so the daemon runs until stop() is called.
-    // (Replaced by long-lived monitor loops in M5+.)
     this.keepAlive = setInterval(() => {}, 1 << 30);
 
-    // M2+: create PiRuntime + bind session
-    // M5+: start per-account monitors
+    // --- Weixin transports (M5): one long-poll monitor per account ---
+    for (const accountId of accounts) {
+      const account = loadWeixinAccount(accountId);
+      if (!account?.token) {
+        throw new Error(
+          `account "${accountId}" has no saved token; run \`pi-weixin-daemon login\` first`,
+        );
+      }
+      const transport = new ILinkWeixinTransport({
+        accountId,
+        token: account.token,
+        logger,
+      });
+      await transport.start();
+      this.transports.push(transport);
+    }
 
-    logger.info("daemon started");
+    // --- Pi runtime (M2) ---
+    // M6+: weixin runtime extension factories + UI context + bridge wiring
+    this.runtime = new PiRuntime({ cwd, logger });
+    await this.runtime.start();
+
+    logger.info(
+      {
+        accounts: this.transports.length,
+        session: this.runtime.getStatus().sessionFile,
+      },
+      "daemon started",
+    );
   }
 
   async stop(): Promise<void> {
@@ -65,9 +94,16 @@ export class Daemon {
     this.stopped = true;
     const { logger } = this.opts;
     logger.info("daemon stopping");
+
+    for (const transport of this.transports) {
+      await transport.stop().catch((err: unknown) => logger.warn({ err }, "transport stop error"));
+    }
+    this.transports = [];
+
+    await this.runtime?.stop().catch((err: unknown) => logger.warn({ err }, "runtime stop error"));
+    this.runtime = undefined;
+
     if (this.keepAlive) clearInterval(this.keepAlive);
-    // M2+: dispose runtime
-    // M5+: stop monitors
     logger.info("daemon stopped");
     this.resolveShutdown();
   }

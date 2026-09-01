@@ -28,6 +28,8 @@ export type WeixinApiOptions = {
   logger?: Logger;
 };
 
+export type GetUpdatesFn = typeof getUpdates;
+
 const defaultLogger = createLogger();
 
 // ---------------------------------------------------------------------------
