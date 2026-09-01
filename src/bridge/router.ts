@@ -6,8 +6,13 @@ import { CommandRouter } from "./commands.js";
 import { ResponseAccumulator } from "./response.js";
 import { BUSY_REPLY, type BridgeState } from "./state.js";
 import { CurrentTurn, toTurnContext } from "./turn-context.js";
-import type { InboundMessage, TurnContext, WeixinTransport } from "./types.js";
+import type { InboundMessage, TurnContext, UiResponseBroker, WeixinTransport } from "./types.js";
 
+interface UiWaiter {
+  accountId: string;
+  resolve: (text: string) => void;
+  reject: (err: Error) => void;
+}
 export interface BridgeDeps {
   /** Bound after runtime creation via bindRuntime(). */
   runtime?: AgentRuntime;
@@ -23,12 +28,13 @@ export interface BridgeDeps {
  * - commands route through CommandRouter in every state
  * - replies (text/files/UI) always go back to the TurnContext origin account
  */
-export class Bridge {
+export class Bridge implements UiResponseBroker {
   private runtime: AgentRuntime | undefined;
   private state: BridgeState = "IDLE";
   private currentTurn = new CurrentTurn();
   private turnPromise: Promise<void> | undefined;
   private unsubscribe: (() => void) | undefined;
+  private uiWaiters: UiWaiter[] = [];
   private readonly commandRouter: CommandRouter;
 
   constructor(private readonly deps: BridgeDeps) {
@@ -64,14 +70,28 @@ export class Bridge {
   private async onMessage(msg: InboundMessage): Promise<void> {
     const log = this.deps.logger;
 
-    // 1. Commands are allowed even while the agent is busy.
+    // 1. Commands are allowed even while the agent is busy / waiting for UI.
     const reply = await this.commandRouter.tryHandle(msg);
     if (reply !== undefined) {
       await this.deps.transport.sendText(toTurnContext(msg), reply);
       return;
     }
 
-    // 2. Busy refusal (no queue, no steering).
+    // 2. WAITING_FOR_UI: only the turn origin account's next ordinary message
+    //    is a UI response; everyone else is still busy.
+    if (this.state === "WAITING_FOR_UI") {
+      const turn = this.currentTurn.get();
+      if (turn && msg.accountId === turn.accountId && msg.senderId === turn.senderId) {
+        log.info({ accountId: msg.accountId }, "UI response received");
+        this.resolveUiWaiter(msg.accountId, msg.text ?? "");
+      } else {
+        log.info({ accountId: msg.accountId, senderId: msg.senderId }, "busy refusal (ui)");
+        await this.deps.transport.sendText(toTurnContext(msg), BUSY_REPLY);
+      }
+      return;
+    }
+
+    // 3. Busy refusal (no queue, no steering).
     if (this.turnPromise) {
       log.info(
         { accountId: msg.accountId, senderId: msg.senderId, state: this.state },
@@ -81,7 +101,7 @@ export class Bridge {
       return;
     }
 
-    // 3. Start the turn. Sequential via turnPromise: while it is set, all
+    // 4. Start the turn. Sequential via turnPromise: while it is set, all
     //    ordinary messages are refused above.
     this.turnPromise = this.runTurn(msg);
     await this.turnPromise;
@@ -119,9 +139,66 @@ export class Bridge {
         await this.deps.transport.sendText(turn, finalText);
       }
     } finally {
+      this.cancelUiWaiters("turn ended");
       this.state = "IDLE";
       this.currentTurn.set(undefined);
       this.turnPromise = undefined;
+    }
+  }
+
+  // --- UiResponseBroker ------------------------------------------------------
+
+  beginUiInteraction(): void {
+    this.state = "WAITING_FOR_UI";
+  }
+
+  endUiInteraction(): void {
+    if (this.state === "WAITING_FOR_UI") {
+      this.state = "RUNNING";
+    }
+  }
+
+  waitForResponse(
+    turn: TurnContext,
+    opts?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const waiter: UiWaiter = {
+        accountId: turn.accountId,
+        resolve: (text: string) => {
+          cleanup();
+          resolve(text);
+        },
+        reject: (err: Error) => {
+          cleanup();
+          reject(err);
+        },
+      };
+      const cleanup = () => {
+        this.uiWaiters = this.uiWaiters.filter((w) => w !== waiter);
+        opts?.signal?.removeEventListener("abort", onAbort);
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      };
+      const onAbort = () => waiter.reject(new Error("UI interaction aborted"));
+      opts?.signal?.addEventListener("abort", onAbort, { once: true });
+      let timeoutHandle: NodeJS.Timeout | undefined;
+      if (opts?.timeoutMs) {
+        timeoutHandle = setTimeout(() => waiter.reject(new Error("UI interaction timed out")), opts.timeoutMs);
+      }
+      this.uiWaiters.push(waiter);
+    });
+  }
+
+  cancelUiWaiters(reason: string): void {
+    for (const waiter of this.uiWaiters.splice(0)) {
+      waiter.reject(new Error(reason));
+    }
+  }
+
+  private resolveUiWaiter(accountId: string, text: string): void {
+    const waiter = this.uiWaiters.find((w) => w.accountId === accountId);
+    if (waiter) {
+      waiter.resolve(text);
     }
   }
 

@@ -1,0 +1,177 @@
+import { describe, it, expect, vi } from "vitest";
+import { Bridge } from "../../src/bridge/router.js";
+import { MultiAccountTransport } from "../../src/bridge/multi-account-transport.js";
+import { BUSY_REPLY } from "../../src/bridge/state.js";
+import { WeixinUIContext } from "../../src/agent/ui-context.js";
+import type { TurnContext, UiResponseBroker } from "../../src/bridge/types.js";
+import { createLogger } from "../../src/util/logger.js";
+import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
+import { FakeWeixinTransport, makeInboundMessage, makeTurn } from "../helpers/fake-transport.js";
+
+const logger = createLogger({ level: "silent" });
+
+function setupBridge() {
+  const runtime = new FakeAgentRuntime();
+  const transportA = new FakeWeixinTransport();
+  const transportB = new FakeWeixinTransport();
+  const multi = new MultiAccountTransport();
+  multi.register("acct-a", transportA);
+  multi.register("acct-b", transportB);
+  const bridge = new Bridge({ transport: multi, logger });
+  bridge.bindRuntime(runtime);
+  bridge.attach();
+  return { runtime, transportA, transportB, bridge };
+}
+
+describe("M9 bridge UI response routing", () => {
+  it("turn account's next message resolves the UI waiter; other accounts get busy", async () => {
+    const { runtime, transportA, transportB, bridge } = setupBridge();
+    // Start a real turn so currentTurn is set (as in production).
+    const turnPromise = transportA.emit(
+      makeInboundMessage({ accountId: "acct-a", senderId: "user-a", messageId: "t0", text: "开始任务" }),
+    );
+    await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
+    expect(bridge.getState()).toBe("RUNNING");
+
+    bridge.beginUiInteraction();
+    expect(bridge.getState()).toBe("WAITING_FOR_UI");
+
+    const responsePromise = bridge.waitForResponse(makeTurn("acct-a", "user-a"));
+    let resolved = "";
+    responsePromise.then((text) => (resolved = text));
+
+    // Other account -> busy
+    await transportB.emit(
+      makeInboundMessage({ accountId: "acct-b", senderId: "user-b", messageId: "b1", text: "hi" }),
+    );
+    expect(transportB.textsTo("acct-b")).toEqual([BUSY_REPLY]);
+
+    // Turn account -> UI response
+    await transportA.emit(
+      makeInboundMessage({ accountId: "acct-a", senderId: "user-a", messageId: "a1", text: "1" }),
+    );
+    expect(resolved).toBe("1");
+
+    bridge.endUiInteraction();
+    expect(bridge.getState()).toBe("RUNNING");
+
+    runtime.complete("done");
+    await turnPromise;
+  });
+
+  it("cancelUiWaiters rejects pending dialogs (e.g. /abort)", async () => {
+    const { bridge } = setupBridge();
+    const turn = makeTurn("acct-a", "user-a");
+
+    const responsePromise = bridge.waitForResponse(turn);
+    const rejection = vi.fn();
+    responsePromise.catch(rejection);
+
+    bridge.cancelUiWaiters("aborted");
+    await vi.waitFor(() => expect(rejection).toHaveBeenCalled());
+    expect(rejection).toHaveBeenCalledWith(expect.objectContaining({ message: "aborted" }));
+  });
+
+  it("waitForResponse supports timeout", async () => {
+    const { bridge } = setupBridge();
+    const turn = makeTurn("acct-a", "user-a");
+    const responsePromise = bridge.waitForResponse(turn, { timeoutMs: 20 });
+    await expect(responsePromise).rejects.toThrow("timed out");
+  });
+});
+
+describe("M9 WeixinUIContext dialogs", () => {
+  class FakeBroker implements UiResponseBroker {
+    beginCount = 0;
+    endCount = 0;
+    private waiters: Array<{ resolve: (t: string) => void; reject: (e: Error) => void }> = [];
+
+    beginUiInteraction(): void {
+      this.beginCount += 1;
+    }
+    endUiInteraction(): void {
+      this.endCount += 1;
+    }
+    waitForResponse(_turn: TurnContext): Promise<string> {
+      return new Promise((resolve, reject) => {
+        this.waiters.push({ resolve, reject });
+      });
+    }
+    cancelUiWaiters(_reason: string): void {}
+    resolveWith(text: string): void {
+      const w = this.waiters.shift();
+      w?.resolve(text);
+    }
+  }
+
+  function setupUi() {
+    const transport = new FakeWeixinTransport();
+    const broker = new FakeBroker();
+    const turn = makeTurn("acct-a", "user-a");
+    const ui = new WeixinUIContext({
+      broker,
+      transport,
+      getCurrentTurn: () => turn,
+      logger,
+    });
+    return { transport, broker, ui, turn };
+  }
+
+  it("confirm renders options and parses 1/取消", async () => {
+    const { transport, broker, ui } = setupUi();
+    const promise = ui.confirm("部署", "确定部署到生产环境吗？");
+    await vi.waitFor(() => expect(broker.beginCount).toBe(1));
+
+    const sent = transport.sentTexts.at(-1)!.text;
+    expect(sent).toContain("🔔 部署");
+    expect(sent).toContain("确定部署到生产环境吗？");
+    expect(sent).toContain("1. 确认");
+    expect(sent).toContain("2. 取消");
+
+    broker.resolveWith("1");
+    await expect(promise).resolves.toBe(true);
+
+    const promise2 = ui.confirm("x", "y");
+    await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
+    broker.resolveWith("取消");
+    await expect(promise2).resolves.toBe(false);
+    expect(broker.endCount).toBe(2);
+  });
+
+  it("select parses numbered choices", async () => {
+    const { transport, broker, ui } = setupUi();
+    const promise = ui.select("选择部署环境", ["生产", "预发", "测试"]);
+    await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
+    const sent = transport.sentTexts.at(-1)!.text;
+    expect(sent).toContain("1. 生产");
+    expect(sent).toContain("3. 测试");
+
+    broker.resolveWith("2");
+    await expect(promise).resolves.toBe("预发");
+  });
+
+  it("input returns the raw reply", async () => {
+    const { transport, broker, ui } = setupUi();
+    const promise = ui.input("输入版本号", "v1.0.0");
+    await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
+    expect(transport.sentTexts.at(-1)!.text).toContain("v1.0.0");
+
+    broker.resolveWith("v2.3.4");
+    await expect(promise).resolves.toBe("v2.3.4");
+  });
+
+  it("notify sends a fire-and-forget message to the current turn", async () => {
+    const { transport, ui } = setupUi();
+    ui.notify("任务完成", "info");
+    await vi.waitFor(() => expect(transport.sentTexts.length).toBe(1));
+    expect(transport.sentTexts[0]!.text).toContain("任务完成");
+  });
+
+  it("notify with no active turn is a no-op", () => {
+    const transport = new FakeWeixinTransport();
+    const broker = new FakeBroker();
+    const ui = new WeixinUIContext({ broker, transport, getCurrentTurn: () => undefined, logger });
+    ui.notify("nobody home", "info");
+    expect(transport.sentTexts).toHaveLength(0);
+  });
+});

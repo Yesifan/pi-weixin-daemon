@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PiRuntime } from "./agent/runtime.js";
 import { createWeixinRuntimeExtension } from "./agent/runtime-extension.js";
+import { WeixinUIContext } from "./agent/ui-context.js";
 import { MultiAccountTransport } from "./bridge/multi-account-transport.js";
 import { Bridge } from "./bridge/router.js";
 import type { Logger } from "./util/logger.js";
@@ -82,7 +83,7 @@ export class Daemon {
     // --- Bridge (M6): routes inbound messages; runtime bound below ---
     this.bridge = new Bridge({ transport: this.multiTransport, logger });
 
-    // --- Pi runtime (M2) + weixin runtime extension (M3) ---
+    // --- Pi runtime (M2) + weixin runtime extension (M3) + weixin UI (M9) ---
     // weixin_send_file routes through the multi-account facade, so it always
     // lands on the transport owning the current turn's account.
     this.runtime = new PiRuntime({
@@ -97,6 +98,12 @@ export class Daemon {
           logger,
         }),
       ],
+      uiContext: new WeixinUIContext({
+        broker: this.bridge,
+        transport: this.multiTransport,
+        getCurrentTurn: () => this.bridge?.getCurrentTurn(),
+        logger,
+      }),
     });
     await this.runtime.start();
 
