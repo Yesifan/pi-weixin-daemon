@@ -1,4 +1,8 @@
+import path from "node:path";
 import { PiRuntime } from "./agent/runtime.js";
+import { createWeixinRuntimeExtension } from "./agent/runtime-extension.js";
+import { MultiAccountTransport } from "./bridge/multi-account-transport.js";
+import { Bridge } from "./bridge/router.js";
 import type { Logger } from "./util/logger.js";
 import { loadWeixinAccount } from "./weixin/auth/accounts.js";
 import { ILinkWeixinTransport } from "./weixin/transport.js";
@@ -16,18 +20,6 @@ export interface DaemonOptions {
  *
  * Owns: weixin transports (one per account) -> bridge (busy state, TurnContext,
  * command routing) -> Pi AgentSessionRuntime (bound to `cwd`).
- *
- * Milestone roadmap:
- *  M1: lifecycle skeleton (start/stop + signals)            [done]
- *  M2: Pi SDK runtime                                       [done]
- *  M3: runtime weixin extension (weixin_send_file)          [done]
- *  M4: Tencent QR login / account storage                   [done]
- *  M5: monitors (getUpdates long-poll)                      [this]
- *  M6: text bridge (Weixin <-> Pi <-> Weixin)
- *  M7: typing / context_token
- *  M8: media
- *  M9: extension UI (confirm/select/input/notify)
- *  M10: productionization (systemd, structured logging, doctor)
  */
 export class Daemon {
   private stopped = false;
@@ -35,7 +27,9 @@ export class Daemon {
   private readonly shutdownPromise: Promise<void>;
   private resolveShutdown!: () => void;
   private runtime: PiRuntime | undefined;
+  private bridge: Bridge | undefined;
   private transports: ILinkWeixinTransport[] = [];
+  private multiTransport = new MultiAccountTransport();
 
   constructor(private readonly opts: DaemonOptions) {
     this.shutdownPromise = new Promise((resolve) => {
@@ -73,12 +67,33 @@ export class Daemon {
       });
       await transport.start();
       this.transports.push(transport);
+      this.multiTransport.register(accountId, transport);
     }
 
-    // --- Pi runtime (M2) ---
-    // M6+: weixin runtime extension factories + UI context + bridge wiring
-    this.runtime = new PiRuntime({ cwd, logger });
+    // --- Bridge (M6): routes inbound messages; runtime bound below ---
+    this.bridge = new Bridge({ transport: this.multiTransport, logger });
+
+    // --- Pi runtime (M2) + weixin runtime extension (M3) ---
+    // weixin_send_file routes through the multi-account facade, so it always
+    // lands on the transport owning the current turn's account.
+    this.runtime = new PiRuntime({
+      cwd,
+      logger,
+      extensionFactories: [
+        createWeixinRuntimeExtension({
+          transport: this.multiTransport,
+          getCurrentTurn: () => this.bridge?.getCurrentTurn(),
+          cwd,
+          tmpDir: path.join(cwd, ".pi-weixin", "tmp"),
+          logger,
+        }),
+      ],
+    });
     await this.runtime.start();
+
+    // Bind bridge to runtime and start listening for inbound messages.
+    this.bridge.bindRuntime(this.runtime);
+    this.bridge.attach();
 
     logger.info(
       {
@@ -94,6 +109,9 @@ export class Daemon {
     this.stopped = true;
     const { logger } = this.opts;
     logger.info("daemon stopping");
+
+    this.bridge?.detach();
+    await this.multiTransport.stop().catch((err: unknown) => logger.warn({ err }, "multi transport stop error"));
 
     for (const transport of this.transports) {
       await transport.stop().catch((err: unknown) => logger.warn({ err }, "transport stop error"));

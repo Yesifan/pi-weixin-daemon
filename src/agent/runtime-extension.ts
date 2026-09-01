@@ -6,7 +6,8 @@ import type { Logger } from "../util/logger.js";
 import type { TurnContext, WeixinTransport } from "../bridge/types.js";
 
 export interface WeixinRuntimeExtensionDeps {
-  transport: WeixinTransport;
+  /** Per-account dispatch: the daemon routes to the transport owning the TurnContext's account. */
+  transport: Pick<WeixinTransport, "sendFile">;
   /** Current turn origin (set by the bridge while an agent run is active). */
   getCurrentTurn: () => TurnContext | undefined;
   /** Project cwd; sendable files must live inside it (or tmpDir). */

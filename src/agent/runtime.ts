@@ -37,6 +37,19 @@ export interface SessionStatus {
 
 type RuntimeListener = (event: AgentSessionEvent) => void;
 
+/** Runtime surface used by the bridge; implemented by PiRuntime, faked in tests. */
+export interface AgentRuntime {
+  readonly cwd: string;
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  prompt(text: string, images?: ImageContent[]): Promise<void>;
+  abort(): Promise<void>;
+  newSession(): Promise<void>;
+  compact(customInstructions?: string): Promise<void>;
+  onEvent(listener: RuntimeListener): () => void;
+  getStatus(): SessionStatus;
+}
+
 /**
  * Thin wrapper around Pi's AgentSessionRuntime (SDK embedding mode).
  *
@@ -50,7 +63,7 @@ type RuntimeListener = (event: AgentSessionEvent) => void;
  * ~/.pi/agent/extensions), skills, settings and tool activation are all
  * delegated to Pi.
  */
-export class PiRuntime {
+export class PiRuntime implements AgentRuntime {
   private runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
   private sessionRef: AgentSession | undefined;
   private unsubscribe: (() => void) | undefined;

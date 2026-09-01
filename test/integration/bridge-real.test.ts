@@ -1,0 +1,64 @@
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { PiRuntime } from "../../src/agent/runtime.js";
+import { Bridge } from "../../src/bridge/router.js";
+import { MultiAccountTransport } from "../../src/bridge/multi-account-transport.js";
+import { createLogger } from "../../src/util/logger.js";
+import { createTmpProject, waitForMarker } from "../helpers/tmp-project.js";
+import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transport.js";
+
+const logger = createLogger({ level: "warn" });
+const TIMEOUT = 120_000;
+
+describe("M6 e2e: weixin -> real Pi runtime -> weixin", () => {
+  const runtimes: PiRuntime[] = [];
+
+  afterEach(async () => {
+    for (const r of runtimes.splice(0)) {
+      await r.stop().catch(() => {});
+    }
+  });
+
+  it(
+    "user A's message runs the agent (with project tool) and the reply goes only to A",
+    async () => {
+      const project = createTmpProject("m6-e2e");
+      const transportA = new FakeWeixinTransport();
+      const multi = new MultiAccountTransport();
+      multi.register("acct-a", transportA);
+
+      const runtime = new PiRuntime({ cwd: project.dir, logger });
+      runtimes.push(runtime);
+      await runtime.start();
+
+      const bridge = new Bridge({ transport: multi, logger });
+      bridge.bindRuntime(runtime);
+      bridge.attach();
+
+      const turnPromise = transportA.emit(
+        makeInboundMessage({
+          accountId: "acct-a",
+          senderId: "user-a",
+          messageId: "m1",
+          text: "请调用 mark_test_tool 工具，参数 input 的值为 e2e42。然后告诉我结果。",
+        }),
+      );
+      await turnPromise;
+
+      // Project extension tool ran during the turn.
+      const marker = await waitForMarker(project.markerFile, TIMEOUT);
+      expect(marker).toContain("input=e2e42");
+
+      // The reply (agent text) went to A only, and the turn settled.
+      const replies = transportA.textsTo("acct-a");
+      expect(replies.length).toBeGreaterThan(0);
+      const last = replies.at(-1)!;
+      expect(last).toBeTruthy();
+      // Typing was set and cleared.
+      expect(transportA.typingEvents.map((t) => t.typing)).toEqual([true, false]);
+
+      // B (unregistered account) got nothing; state is idle again.
+      expect(bridge.getState()).toBe("IDLE");
+    },
+    TIMEOUT + 30_000,
+  );
+});
