@@ -67,6 +67,9 @@ export function runCommand(): Command {
         await daemon.waitForShutdown();
       } catch (err) {
         logger.error({ err }, "daemon failed");
+        // start() may have left the keep-alive running; tear down so the
+        // process can exit with a failure code instead of hanging.
+        await daemon.stop().catch(() => {});
         process.exitCode = 1;
       }
     });

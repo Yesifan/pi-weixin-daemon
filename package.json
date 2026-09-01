@@ -13,7 +13,8 @@
     "dist",
     "systemd",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "LICENSE.attribution"
   ],
   "scripts": {
     "build": "tsc",
