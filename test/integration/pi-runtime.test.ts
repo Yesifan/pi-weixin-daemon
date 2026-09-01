@@ -1,0 +1,70 @@
+import { describe, it, expect, afterEach } from "vitest";
+import { PiRuntime } from "../../src/agent/runtime.js";
+import { createLogger } from "../../src/util/logger.js";
+import { createTmpProject, waitForMarker, type TmpProject } from "../helpers/tmp-project.js";
+
+const logger = createLogger({ level: "warn" });
+
+const TIMEOUT = 120_000;
+
+async function promptAndExpectMarker(runtime: PiRuntime, input: string, markerFile: string): Promise<string> {
+  await runtime.prompt(
+    `请调用 mark_test_tool 工具，参数 input 的值为 ${input}。只调用这个工具，不要做其他事情。`,
+  );
+  const marker = await waitForMarker(markerFile, TIMEOUT);
+  expect(marker).toContain(`input=${input}`);
+  return marker;
+}
+
+describe("M2: Pi SDK runtime integration (real SDK + real model)", () => {
+  let project: TmpProject | undefined;
+  const runtimes: PiRuntime[] = [];
+
+  afterEach(async () => {
+    for (const r of runtimes.splice(0)) {
+      await r.stop().catch(() => {});
+    }
+  });
+
+  it(
+    "loads project .pi/extensions and executes its tool in a daemon-created session",
+    async () => {
+      project = createTmpProject("m2-ext-load");
+      const runtime = new PiRuntime({ cwd: project.dir, logger });
+      runtimes.push(runtime);
+
+      await runtime.start();
+
+      const status = runtime.getStatus();
+      expect(status.sessionFile).toBeTruthy();
+      expect(status.sessionId).toBeTruthy();
+      expect(status.model).not.toBe("unknown");
+
+      await promptAndExpectMarker(runtime, "hello123", project.markerFile);
+
+      // Second prompt in the same session must still work (same bound session).
+      await promptAndExpectMarker(runtime, "again456", project.markerFile);
+    },
+    TIMEOUT + 30_000,
+  );
+
+  it(
+    "keeps project extension tools after newSession (session replacement + rebind)",
+    async () => {
+      project = createTmpProject("m2-new-session");
+      const runtime = new PiRuntime({ cwd: project.dir, logger });
+      runtimes.push(runtime);
+
+      await runtime.start();
+      const firstFile = runtime.getStatus().sessionFile;
+
+      await runtime.newSession();
+      const secondFile = runtime.getStatus().sessionFile;
+      expect(secondFile).toBeTruthy();
+      expect(secondFile).not.toBe(firstFile);
+
+      await promptAndExpectMarker(runtime, "afternew789", project.markerFile);
+    },
+    TIMEOUT + 30_000,
+  );
+});
