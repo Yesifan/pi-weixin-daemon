@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { Bridge } from "../../src/bridge/router.js";
 import { MultiAccountTransport } from "../../src/bridge/multi-account-transport.js";
 import { BUSY_REPLY } from "../../src/bridge/state.js";
@@ -27,8 +29,7 @@ const msgA = (text: string, id = "m1") =>
 const msgB = (text: string, id = "m2") =>
   makeInboundMessage({ accountId: "acct-b", senderId: "user-b", messageId: id, text });
 
-describe("M6 bridge (fake transport + fake runtime)", () => {
-  it("A starts a turn; B gets busy refusal; completion replies only to A", async () => {
+describe("M6 bridge (fake transport + fake runtime)", () => {  it("A starts a turn; B gets busy refusal; completion replies only to A", async () => {
     const { runtime, transportA, transportB, bridge } = setup();
 
     const turnPromise = transportA.emit(msgA("帮我写个计划"));
@@ -146,5 +147,62 @@ describe("M6 commands over weixin", () => {
     const { transportA } = setup();
     await transportA.emit(msgA("/frobnicate"));
     expect(transportA.textsTo("acct-a").at(-1)).toContain("未知命令");
+  });
+});
+
+describe("M8 media routing through the bridge", () => {
+  it("image attachments become multimodal ImageContent in the prompt", async () => {
+    const { runtime, transportA } = setup();
+    // 1x1 png
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    const imgPath = path.join(process.cwd(), "test/.tmp", "m8-test-image.png");
+    fs.mkdirSync(path.dirname(imgPath), { recursive: true });
+    fs.writeFileSync(imgPath, Buffer.from(pngBase64, "base64"));
+
+    const turnPromise = transportA.emit(
+      makeInboundMessage({
+        accountId: "acct-a",
+        senderId: "user-a",
+        messageId: "m-img",
+        text: "看看这张图",
+        attachments: [{ kind: "image", localPath: imgPath, filename: "image.png", mimeType: "image/png" }],
+      }),
+    );
+    await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
+
+    expect(runtime.prompts[0]?.text).toBe("看看这张图");
+    const images = runtime.prompts[0]?.images;
+    expect(images).toHaveLength(1);
+    expect(images?.[0]).toMatchObject({ type: "image", mimeType: "image/png" });
+
+    runtime.complete("图片已收到");
+    await turnPromise;
+  });
+
+  it("file attachments are referenced by local path in the prompt text", async () => {
+    const { runtime, transportA } = setup();
+    const filePath = path.join(process.cwd(), "test/.tmp", "m8-inbox", "42", "data.csv");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "a,b\n1,2\n");
+
+    const turnPromise = transportA.emit(
+      makeInboundMessage({
+        accountId: "acct-a",
+        senderId: "user-a",
+        messageId: "m-file",
+        text: "分析这个文件",
+        attachments: [{ kind: "file", localPath: filePath, filename: "data.csv", mimeType: "text/csv" }],
+      }),
+    );
+    await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
+
+    const promptText = runtime.prompts[0]?.text ?? "";
+    expect(promptText).toContain("分析这个文件");
+    expect(promptText).toContain(filePath);
+    expect(promptText).toContain("data.csv");
+
+    runtime.complete("已分析");
+    await turnPromise;
   });
 });

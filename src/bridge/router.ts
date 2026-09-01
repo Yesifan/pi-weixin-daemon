@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { ImageContent } from "@earendil-works/pi-ai/compat";
 import type { AgentRuntime } from "../agent/runtime.js";
 import type { Logger } from "../util/logger.js";
@@ -101,7 +102,7 @@ export class Bridge {
 
       let finalText: string;
       try {
-        await runtime.prompt(msg.text ?? "", imagesOf(msg));
+        await runtime.prompt(buildPromptText(msg), imagesOf(msg, log));
         // agent_settled may arrive just after prompt() resolves; wait for it.
         await accumulator.settled;
         finalText = accumulator.accumulatedText.trim();
@@ -149,7 +150,37 @@ function describeRunError(err: unknown): string {
   return `⚠️ Agent 运行出错：${err instanceof Error ? err.message : String(err)}`;
 }
 
-/** M8: weixin inbound images -> multimodal ImageContent[]. */
-function imagesOf(_msg: InboundMessage): ImageContent[] | undefined {
-  return undefined;
+/**
+ * Build the prompt text: message text + local paths of non-image attachments
+ * (files/videos/voice are referenced by path; images go as true multimodal input).
+ */
+function buildPromptText(msg: InboundMessage): string {
+  const parts: string[] = [msg.text ?? ""];
+  for (const a of msg.attachments) {
+    if (a.kind === "image") continue; // passed as ImageContent
+    const label =
+      a.kind === "file" ? "文件" : a.kind === "video" ? "视频文件" : "语音文件";
+    parts.push(`\n[收到${label}: ${a.filename ?? a.localPath} → 本地路径 ${a.localPath}]`);
+  }
+  return parts.join("\n");
+}
+
+/** Weixin images -> true multimodal ImageContent[] (base64 + detected mime). */
+function imagesOf(msg: InboundMessage, log: Logger): ImageContent[] | undefined {
+  const images = msg.attachments.filter((a) => a.kind === "image");
+  if (images.length === 0) return undefined;
+  const contents: ImageContent[] = [];
+  for (const img of images) {
+    try {
+      const buf = fs.readFileSync(img.localPath);
+      contents.push({
+        type: "image",
+        data: buf.toString("base64"),
+        mimeType: img.mimeType ?? "image/jpeg",
+      });
+    } catch (err) {
+      log.warn({ err, path: img.localPath }, "failed to read inbound image");
+    }
+  }
+  return contents.length > 0 ? contents : undefined;
 }

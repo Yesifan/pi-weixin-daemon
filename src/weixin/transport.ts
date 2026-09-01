@@ -4,6 +4,8 @@ import { getConfig, notifyStart, notifyStop, sendTyping as sendTypingApi } from 
 import { WeixinConfigManager } from "./api/config-cache.js";
 import { TypingStatus, type WeixinMessage } from "./api/types.js";
 import { resolveWeixinBaseUrl } from "./auth/accounts.js";
+import { downloadAttachmentsFromMessage } from "./media/media-download.js";
+import { sendWeixinMediaFile } from "./messaging/send-media.js";
 import { monitorWeixinProvider } from "./monitor/monitor.js";
 import { normalizeInboundMessage } from "./normalize.js";
 import { sendTextMessage } from "./messaging/send.js";
@@ -14,6 +16,8 @@ export interface WeixinTransportOptions {
   /** API base URL; defaults to the account's stored baseUrl or the official endpoint. */
   baseUrl?: string;
   token?: string;
+  /** Inbox directory for inbound media: <cwd>/.pi-weixin/inbox. */
+  inboxDir: string;
   logger: Logger;
   cdnBaseUrl?: string;
 }
@@ -105,9 +109,20 @@ export class ILinkWeixinTransport implements WeixinTransport {
     });
   }
 
-  /** v0.1 outbound media is implemented in M8 (CDN upload + native FILE message). */
-  async sendFile(_ctx: TurnContext, _path: string, _caption?: string): Promise<void> {
-    throw new Error("sendFile not implemented yet (M8: CDN upload)");
+  /** Send a file as a native weixin attachment (CDN upload + FILE/IMAGE/VIDEO message). */
+  async sendFile(ctx: TurnContext, filePath: string, caption?: string): Promise<void> {
+    await sendWeixinMediaFile({
+      filePath,
+      to: ctx.senderId,
+      text: caption ?? "",
+      opts: {
+        baseUrl: this.baseUrl,
+        token: this.token,
+        contextToken: ctx.contextToken,
+        logger: this.opts.logger,
+      },
+      cdnBaseUrl: this.opts.cdnBaseUrl,
+    });
   }
 
   async setTyping(ctx: TurnContext, typing: boolean): Promise<void> {
@@ -141,7 +156,14 @@ export class ILinkWeixinTransport implements WeixinTransport {
   }
 
   private async handleInbound(raw: WeixinMessage): Promise<void> {
-    const msg = normalizeInboundMessage(this.opts.accountId, raw);
+    // Media is downloaded to <inboxDir>/<messageKey>/ before normalization.
+    // Download failures never block message processing (attachment skipped).
+    const attachments = await downloadAttachmentsFromMessage(raw, {
+      inboxDir: this.opts.inboxDir,
+      cdnBaseUrl: this.opts.cdnBaseUrl,
+      logger: this.opts.logger,
+    });
+    const msg = normalizeInboundMessage(this.opts.accountId, raw, attachments);
     if (msg.senderId && msg.contextToken) {
       setContextToken(this.opts.accountId, msg.senderId, msg.contextToken);
     }

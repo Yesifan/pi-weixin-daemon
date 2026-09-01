@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { PiRuntime } from "./agent/runtime.js";
 import { createWeixinRuntimeExtension } from "./agent/runtime-extension.js";
@@ -52,6 +53,13 @@ export class Daemon {
     // Keep the event loop alive so the daemon runs until stop() is called.
     this.keepAlive = setInterval(() => {}, 1 << 30);
 
+    // --- Project-local daemon directories (media inbox + outbound staging) ---
+    const inboxDir = path.join(cwd, ".pi-weixin", "inbox");
+    const tmpDir = path.join(cwd, ".pi-weixin", "tmp");
+    fs.mkdirSync(inboxDir, { recursive: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
+    ensurePiWeixinGitignore(cwd, logger);
+
     // --- Weixin transports (M5): one long-poll monitor per account ---
     for (const accountId of accounts) {
       const account = loadWeixinAccount(accountId);
@@ -63,6 +71,7 @@ export class Daemon {
       const transport = new ILinkWeixinTransport({
         accountId,
         token: account.token,
+        inboxDir,
         logger,
       });
       await transport.start();
@@ -84,7 +93,7 @@ export class Daemon {
           transport: this.multiTransport,
           getCurrentTurn: () => this.bridge?.getCurrentTurn(),
           cwd,
-          tmpDir: path.join(cwd, ".pi-weixin", "tmp"),
+          tmpDir,
           logger,
         }),
       ],
@@ -129,5 +138,28 @@ export class Daemon {
   /** Resolves once stop() has completed. Keeps the process alive while running. */
   waitForShutdown(): Promise<void> {
     return this.shutdownPromise;
+  }
+}
+
+/**
+ * Make sure the project git repo ignores the daemon's .pi-weixin/ directory
+ * (media inbox + staging). Best-effort; never rewrites existing entries.
+ */
+function ensurePiWeixinGitignore(cwd: string, logger: Logger): void {
+  try {
+    const gitignorePath = path.join(cwd, ".gitignore");
+    const entry = ".pi-weixin/";
+    let content = "";
+    if (fs.existsSync(gitignorePath)) {
+      content = fs.readFileSync(gitignorePath, "utf-8");
+    }
+    if (content.split(/\r?\n/).some((line) => line.trim() === entry)) {
+      return;
+    }
+    const updated = content.endsWith("\n") || content === "" ? `${content}${entry}\n` : `${content}\n${entry}\n`;
+    fs.writeFileSync(gitignorePath, updated, "utf-8");
+    logger.info({ gitignorePath }, "added .pi-weixin/ to project .gitignore");
+  } catch (err) {
+    logger.warn({ err }, "failed to update project .gitignore");
   }
 }

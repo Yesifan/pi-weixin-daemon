@@ -3,6 +3,7 @@ import path from "node:path";
 import { Type, type Static } from "typebox";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { Logger } from "../util/logger.js";
+import { sanitizeFilename } from "../util/sanitize.js";
 import type { TurnContext, WeixinTransport } from "../bridge/types.js";
 
 export interface WeixinRuntimeExtensionDeps {
@@ -64,15 +65,6 @@ export function validateSendFileParams(filePath: string, cwd: string, tmpDir: st
   }
 
   return { ok: true, resolvedPath: resolved, basename };
-}
-
-/** Strip control characters and anything that could break message fields. */
-export function sanitizeFilename(name: string): string {
-  const cleaned = name
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .replace(/[\\/]/g, "_")
-    .trim();
-  return cleaned;
 }
 
 /**

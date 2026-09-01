@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
-import { validateSendFileParams, sanitizeFilename } from "../../src/agent/runtime-extension.js";
+import { validateSendFileParams } from "../../src/agent/runtime-extension.js";
+import { sanitizeFilename } from "../../src/util/sanitize.js";
 
 describe("validateSendFileParams", () => {
   let root: string;
