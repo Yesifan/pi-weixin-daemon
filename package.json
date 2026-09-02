@@ -1,6 +1,6 @@
 {
   "name": "pi-weixin-daemon",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Connect Weixin iLink Bot with Pi Coding Agent",
   "type": "module",
   "engines": {
@@ -11,13 +11,14 @@
   },
   "files": [
     "dist",
-    "systemd",
     "README.md",
     "LICENSE",
     "LICENSE.attribution"
   ],
   "scripts": {
     "build": "tsc",
+    "prepare": "tsc",
+    "prepublishOnly": "tsc",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -31,12 +32,6 @@
     "qrcode-terminal": "^0.12.0",
     "typebox": "^1.3.23",
     "zod": "^4.5.4"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@google/genai",
-      "protobufjs"
-    ]
   },
   "devDependencies": {
     "@types/node": "^26.4.0",

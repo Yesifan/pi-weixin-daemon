@@ -39,13 +39,20 @@
 
 ```bash
 git clone <repo> && cd pi-weixin-daemon
-corepack pnpm install
+corepack pnpm install        # prepare 会自动 tsc 构建 dist
 corepack pnpm build
-# 链接到 PATH（可选）
-ln -s "$PWD/dist/index.js" ~/.local/bin/pi-weixin-daemon
+
+# 全局安装（可选）：先构建出 dist，再安装到全局
+corepack pnpm install -g ./       # 用 `pnpm install -g ./`（或 `pnpm add -g ./`）
+# 更新：重新构建后再安装一次
+corepack pnpm build && corepack pnpm install -g ./
+
+# 若发布到 npm 后，可直接：
+#   corepack pnpm install -g pi-weixin-daemon
+#   corepack pnpm up -g pi-weixin-daemon
 ```
 
-要求：Node.js >= 22.19。
+要求：Node.js >= 22.19。说明：`pnpm install -g` 需要 `dist` 已生成（`prepare`/`build`），因为全局安装默认不安装本包的 devDeps（`tsc` 不保证可用）。
 
 ## 使用
 
