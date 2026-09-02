@@ -14,10 +14,12 @@ import type {
 import { ProjectStore } from "./projects/project-store.js";
 import type { ProjectConfig, ProjectStoreData } from "./projects/types.js";
 import {
+  clearWeixinAccount,
   loadWeixinAccount,
   listIndexedWeixinAccountIds,
   resolveWeixinAccountIdByName,
   resolveWeixinAccountName,
+  unregisterWeixinAccountId,
 } from "./weixin/auth/accounts.js";
 import { ILinkWeixinTransport } from "./weixin/transport.js";
 import { RpcServer } from "./daemon/rpc-server.js";
@@ -254,13 +256,46 @@ export class Daemon {
 
   /** Re-read the account index and register any newly logged-in accounts. */
   async reloadAccounts(): Promise<void> {
-    for (const accountId of listIndexedWeixinAccountIds()) {
+    // Reconcile: stop transports for accounts no longer registered.
+    const index = new Set(listIndexedWeixinAccountIds());
+    for (const info of this.accountManager.listAccounts()) {
+      if (!index.has(info.accountId)) {
+        await this.accountManager.remove(info.accountId).catch((err: unknown) =>
+          this.deps.logger.warn({ err, account: info.accountId }, "account stop error"),
+        );
+        this.deps.logger.info({ account: info.accountId }, "account monitor stopped (logged out)");
+      }
+    }
+    // Start monitors for newly-logged-in accounts.
+    for (const accountId of index) {
       if (this.accountManager.has(accountId)) continue;
       const account = loadWeixinAccount(accountId);
       if (!account?.token) continue;
       const transport = await this.accountTransport(accountId, account.token, account.baseUrl);
       await this.accountManager.register(accountId, transport, account.userId);
     }
+  }
+
+  /** Log out an account: clear credentials, unbind from projects, stop its monitor. */
+  async logoutAccount(accountId: string): Promise<void> {
+    // 1. Remove the account from any project config first (config stays valid).
+    for (const { name, config } of this.store.list()) {
+      if (config.accounts.includes(accountId)) {
+        this.store.removeAccounts(name, [accountId]);
+        this.deps.logger.info({ project: name, account: accountId }, "removed account from project");
+      }
+    }
+    // 2. Stop its monitor first so it can't rewrite the sync/context-token files.
+    if (this.accountManager.has(accountId)) {
+      await this.accountManager.remove(accountId).catch((err: unknown) =>
+        this.deps.logger.warn({ err, account: accountId }, "account stop error"),
+      );
+    }
+    // 3. Clear credentials + index.
+    clearWeixinAccount(accountId);
+    unregisterWeixinAccountId(accountId);
+    // 4. Reconcile projects + routes.
+    await this.reload();
   }
 
   /** Full status snapshot for `daemon.status` / diagnostics. */

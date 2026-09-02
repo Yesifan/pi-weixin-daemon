@@ -139,6 +139,9 @@ export class RpcServer {
       case "account.reload":
         await this.daemon.reloadAccounts();
         return this.daemon.getAccountStatuses();
+      case "account.logout":
+        await this.daemon.logoutAccount(params.accountId as string);
+        return this.daemon.getAccountStatuses();
       default:
         throw new Error(`unknown rpc method: ${method}`);
     }

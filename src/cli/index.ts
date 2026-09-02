@@ -30,20 +30,26 @@ export function buildProgram(): Command {
 
 function logoutCommand(): Command {
   return new Command("logout")
-    .description("Remove a Weixin account (unregisters credentials + notifies daemon)")
-    .argument("<account>", "account id")
+    .description("Log out a Weixin account (clear credentials, unbind from projects, stop its monitor)")
+    .argument("<account>", "account id or name")
     .action(async (account: string) => {
-      const { unregisterWeixinAccountId, clearWeixinAccount } = await import(
-        "../weixin/auth/accounts.js"
-      );
-      clearWeixinAccount(account);
-      unregisterWeixinAccountId(account);
-      console.log(`Logged out account "${account}".`);
       try {
         const { rpcCall } = await import("./rpc-client.js");
-        await rpcCall("account.reload");
+        const list = await rpcCall<Array<{ accountId: string; name?: string }>>("account.list");
+        const hit = list.find((a) => a.accountId === account || a.name === account);
+        const accountId = (hit?.accountId ?? account) as string;
+        const { resolveWeixinAccountIdByName } = await import("../weixin/auth/accounts.js");
+        const resolved = resolveWeixinAccountIdByName(account) ?? accountId;
+        await rpcCall("account.logout", { accountId: resolved });
+        console.log(`Logged out account "${resolved}".`);
       } catch {
-        // daemon not running; fine
+        // daemon not running: fall back to local credential removal.
+        const { unregisterWeixinAccountId, clearWeixinAccount } = await import(
+          "../weixin/auth/accounts.js"
+        );
+        clearWeixinAccount(account);
+        unregisterWeixinAccountId(account);
+        console.log(`Logged out account "${account}" (daemon not running; credentials cleared).`);
       }
     });
 }
