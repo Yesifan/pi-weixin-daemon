@@ -42,16 +42,32 @@
 ```bash
 git clone <repo> && cd pi-weixin-daemon
 pnpm install        # 安装依赖并自动构建 dist
-
-# 全局安装：打出 tarball（自带 dist，自包含，不依赖 repo），再作为全局包安装
-pnpm pack
-pnpm install -g ./pi-weixin-daemon-*.tgz
-# 更新：重跑 pnpm build && pnpm pack && pnpm install -g ./pi-weixin-daemon-*.tgz
 ```
 
-全局安装后，把 pnpm 的全局 bin 目录加到 PATH（`pnpm config get global-bin-dir`，通常 `~/.local/share/pnpm/bin`）即可使用 `pi-weixin-daemon`。
+把 pnpm 的全局 bin 目录加到 PATH（`pnpm config get global-bin-dir`，通常 `~/.local/share/pnpm/bin`），即可使用 `pi-weixin-daemon`。
 
-> 若安装报 `ERR_PNPM_PACKAGE_MANAGER_ADD_RESOLVE_LATEST` / `should have a @scope`，说明**目录里没有 tarball** —— 先执行 `pnpm pack` 生成它，再安装。
+### 开发时全局安装（推荐）
+
+```bash
+pnpm install -g ./           # 从本仓库目录全局安装，跟随仓库构建
+# 修改源码后更新：先重新构建，再装一次
+pnpm build && pnpm install -g ./
+```
+
+这是开发时最省事的做法：`pi-weixin-daemon` 指向仓库里的 `dist/index.js`（依赖走仓库 `node_modules`）。
+
+### 自包含（发布/独立安装）
+
+```bash
+pnpm build
+pnpm pack --pack-destination release   # 产物集中放 release/（已 gitignore）
+pnpm install -g ./release/pi-weixin-daemon-*.tgz
+# 更新：重跑 pnpm build && pnpm pack && pnpm install -g ./release/pi-weixin-daemon-*.tgz
+```
+
+tarball 自带 dist 与依赖（进入 pnpm store），安装后**不依赖 repo 目录**，适合发布或独立部署。
+
+> `pi-weixin-daemon service install` 会引用**当前运行的二进制**：开发装（`install -g ./`）指向仓库 `dist`，自包含装（tarball）指向全局 store。若安装报 `ERR_PNPM_PACKAGE_MANAGER_ADD_RESOLVE_LATEST / should have a @scope`，说明 tarball 不存在，先 `pnpm pack`。
 
 > `pi-weixin-daemon service install` 会引用**当前运行的二进制**（全局存储里的 `dist/index.js`，依赖随包进入 pnpm store），因此 systemd 服务不依赖某个 repo 目录。
 
