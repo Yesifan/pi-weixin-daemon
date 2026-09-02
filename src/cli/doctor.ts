@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { z } from "zod";
@@ -64,6 +65,39 @@ export function doctorCommand(): Command {
         sdkDetail = String(err);
       }
       checks.push({ name: "pi SDK", ok: sdkOk, detail: sdkDetail });
+
+      // --- Model availability (Pi credentials for the default provider/model) ---
+      let modelOk = false;
+      let modelDetail = "";
+      try {
+        const agentDir =
+          process.env.PI_CODING_AGENT_DIR?.trim() || path.join(os.homedir(), ".pi", "agent");
+        const settingsPath = path.join(agentDir, "settings.json");
+        const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as {
+          defaultProvider?: string;
+          defaultModel?: string;
+        };
+        const provider = settings.defaultProvider;
+        const model = settings.defaultModel;
+        if (!provider) {
+          modelDetail = "no defaultProvider in settings.json";
+        } else {
+          const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+          const mr = await ModelRuntime.create({ allowModelNetwork: false });
+          const available = (await mr.getAvailable()) as unknown as Array<{ provider?: string; id?: string }>;
+          const hasProvider = available.some((m) => m.provider === provider);
+          const hasModel = model
+            ? available.some((m) => m.provider === provider && m.id === model)
+            : hasProvider;
+          modelOk = hasModel;
+          modelDetail = hasModel
+            ? `${provider}/${model ?? "(any)"} available`
+            : `${provider}/${model ?? "(any)"} NOT available — no API key/credentials; see README "配置模型 API key"`;
+        }
+      } catch (err) {
+        modelDetail = `unable to resolve model: ${err instanceof Error ? err.message : String(err)}`;
+      }
+      checks.push({ name: "model availability", ok: modelOk, detail: modelDetail });
 
       // --- State dir ---
       const stateDir = resolveStateDir();

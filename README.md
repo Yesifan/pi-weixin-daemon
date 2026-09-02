@@ -1,4 +1,4 @@
-# pi-weixin-daemon
+# pi-wx（pi-weixin-daemon）
 
 将腾讯微信 iLink Bot 与 [Pi Coding Agent](https://github.com/earendil-works/pi) 直接连接的守护进程。
 
@@ -55,7 +55,7 @@ pnpm install -g ./            # 跟随仓库构建
 pnpm build && pnpm install -g ./   # 改源码后更新
 ```
 
-`pi-weixin-daemon` 指向仓库里的 `dist/index.js`（依赖走仓库 `node_modules`）。
+`pi-wx` 指向仓库里的 `dist/index.js`（依赖走仓库 `node_modules`）。
 
 ### 自包含（发布/独立安装）
 
@@ -68,7 +68,7 @@ pnpm install -g ./release/pi-weixin-daemon-*.tgz
 
 tarball 自带 dist 与依赖（在全局 store），安装后**不依赖 repo 目录**。
 
-> `pi-weixin-daemon service install` 引用**当前运行的二进制**：开发装指向仓库 `dist`，自包含装指向全局 store。
+> `pi-wx service install` 引用**当前运行的二进制**：开发装指向仓库 `dist`，自包含装指向全局 store。
 
 ### npm 等价用法
 
@@ -79,53 +79,77 @@ tarball 自带 dist 与依赖（在全局 store），安装后**不依赖 repo �
 ### 1. 登录微信账号
 
 ```bash
-pi-weixin-daemon login        # 终端显示二维码，手机扫码
-pi-weixin-daemon login        # 再次执行，添加第二个账号（须为另一个微信用户）
-pi-weixin-daemon accounts     # 查看已登录账号（含 id）
+pi-wx login --name personal    # 终端显示二维码，手机扫码（--name 必填）
+pi-wx login --name work        # 再次执行，添加第二个账号（须为另一个微信用户）
+pi-wx accounts                 # 查看已登录账号
 ```
 
-账号 id 为扫码返回的 `ilink_bot_id`（服务端分配，作为 Project 路由 key）。**同一微信用户只可扫码一次**；再次登录同一用户会替换旧账号（按 `ilink_user_id` 去重）。
+`--name` 是账号标识（全局唯一）；账号 **id 仍为扫码返回的 `ilink_bot_id`**（服务端分配，作为 Project 路由 key）。**同一微信用户只可扫码一次**；再次登录同一用户会替换旧账号（按 `ilink_user_id` 去重）。
 
 账号凭据保存在 `$XDG_DATA_HOME/pi-weixin-daemon/accounts/`（默认 `~/.local/share/pi-weixin-daemon/accounts/`，可用 `PI_WEIXIN_DATA_DIR` 覆盖），不写入项目。
 
 ### 2. 诊断
 
 ```bash
-pi-weixin-daemon doctor --cwd /path/to/project --account <id>
+pi-wx doctor --cwd /path/to/project --account <id>
 ```
 
 ### 3. 启动 daemon + 注册 Project
 
 ```bash
 # 装 systemd 用户服务 + 启动（前台由 systemd 托管）
-pi-weixin-daemon service install
-pi-weixin-daemon start
+pi-wx service install
+pi-wx start
 
-# 登录微信账号（账号 id = 扫码返回的 ilink_bot_id；同一用户只可扫码一次）
-pi-weixin-daemon login        # 终端显示二维码，手机扫码
-pi-weixin-daemon login        # 再扫一个（必须是另一个微信用户）
-pi-weixin-daemon accounts     # 查看已登录账号的 id
+# 登录微信账号（--name 标识，id 仍为 ilink_bot_id；同一用户只扫一次）
+pi-wx login --name personal
+pi-wx login --name work
 
-# 注册 Project 并启用（--account 用 accounts 列出的账号 id）
-pi-weixin-daemon project add foo --cwd ~/code/foo --account <账号id>
-pi-weixin-daemon project add bar --cwd ~/code/bar --account <另一个账号id>
-pi-weixin-daemon project enable foo
-pi-weixin-daemon project enable bar
+# 创建 Project 并把账号（按 name）绑定进去
+pi-wx project create foo --cwd ~/code/foo
+pi-wx project foo add personal
+pi-wx project create bar --cwd ~/code/bar
+pi-wx project bar add work
 
-# 查看
-pi-weixin-daemon project list
-pi-weixin-daemon accounts
+# 启用 + 查看
+pi-wx project enable foo
+pi-wx project enable bar
+pi-wx project list
+pi-wx accounts
 ```
 
 ### 4. systemd（用户级）
 
 ```bash
-pi-weixin-daemon service install   # 写入 ~/.config/systemd/user/pi-weixin-daemon.service（解析 CLI 绝对路径，不 sudo）
-pi-weixin-daemon start             # systemctl --user start pi-weixin-daemon
-pi-weixin-daemon logs              # journalctl --user -u pi-weixin-daemon
+pi-wx service install   # 写入 ~/.config/systemd/user/pi-weixin-daemon.service（解析 CLI 绝对路径，不 sudo）
+pi-wx start             # systemctl --user start pi-weixin-daemon
+pi-wx logs              # journalctl --user -u pi-weixin-daemon
 ```
 
 日志为 JSON 结构化输出（pino），直接适配 journald。`Restart=on-failure` 会在崩溃后自动拉起；`TimeoutStopSec=15` 配合 daemon 的优雅关闭。
+
+### 配置 Pi 模型 API key
+
+daemon 通过 Pi SDK 运行模型，需要对应 provider 的凭据。若运行时报 `No API key found for the selected model`，先看 `pi-wx doctor` 的 `model availability` 一项：
+
+- **default provider** 由 `~/.pi/agent/settings.json` 的 `defaultProvider` / `defaultModel` 决定（如 `deepseek` / `anthropic` / `openai`）。
+- 各 provider 对应一个**环境变量**（`deepseek`→`DEEPSEEK_API_KEY`，`anthropic`→`ANTHROPIC_API_KEY`，`openai`→`OPENAI_API_KEY` …），可在 `pi` 的 `pi login` / `providers.md` 里查到。
+
+两种配置方式：
+
+1. **交互终端用**：把 key 写到 `~/.pi/agent/auth.json` 或用 `pi login`（写入该文件）。
+2. **systemd 服务用**（推荐，key 不进单元的明文）：
+   ```bash
+   printf 'DEEPSEEK_API_KEY=sk-xxx\n' > ~/.config/pi-weixin-daemon/env
+   chmod 600 ~/.config/pi-weixin-daemon/env
+   # 让服务读取它
+   systemctl --user edit pi-weixin-daemon
+   # 在 [Service] 加一行：
+   #   EnvironmentFile=%h/.config/pi-weixin-daemon/env
+   systemctl --user restart pi-weixin-daemon
+   ```
+
+> 系统化说明：`pi-wx` 的服务运行在 systemd 下，**不继承 shell 环境变量**。如果你只在 shell 里 `export DEEPSEEK_API_KEY=...`，交互终端可用，但服务里拿不到——必须写到 `auth.json` 或通过 `EnvironmentFile` 注入。
 
 ## 微信内命令
 
