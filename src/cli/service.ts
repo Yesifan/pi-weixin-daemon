@@ -79,7 +79,7 @@ export function serviceCommand(): Command {
       console.log(`  ExecStart=${resolveCliEntry()}`);
       console.log("Next: `systemctl --user daemon-reload` then `pi-weixin-daemon start`.");
       console.log(
-        "To keep it running without a login shell: `loginctl enable-linger <user>` (do NOT use sudo).",
+        "To keep it running without a login shell: `loginctl enable-linger $USER` (do NOT use sudo).",
       );
     });
 

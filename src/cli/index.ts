@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { accountsCommand } from "./accounts.js";
-import { controlCommand } from "./control.js";
+import { logsCommand, restartCommand, startCommand, statusCommand, stopCommand } from "./control.js";
 import { doctorCommand } from "./doctor.js";
 import { loginCommand } from "./login.js";
 import { projectCommand } from "./project.js";
@@ -15,7 +15,11 @@ export function buildProgram(): Command {
     .version("0.2.0");
   program.addCommand(serveCommand());
   program.addCommand(serviceCommand());
-  program.addCommand(controlCommand());
+  program.addCommand(startCommand());
+  program.addCommand(stopCommand());
+  program.addCommand(restartCommand());
+  program.addCommand(statusCommand());
+  program.addCommand(logsCommand());
   program.addCommand(loginCommand());
   program.addCommand(logoutCommand());
   program.addCommand(accountsCommand());
