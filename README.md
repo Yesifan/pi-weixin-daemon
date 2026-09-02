@@ -84,7 +84,7 @@ pi-weixin-daemon login        # 再次执行，添加第二个账号
 pi-weixin-daemon accounts     # 查看已登录账号
 ```
 
-账号凭据保存在 `~/.local/state/pi-weixin-daemon/`（可用 `PI_WEIXIN_STATE_DIR` 覆盖），不写入项目。
+账号凭据保存在 `$XDG_DATA_HOME/pi-weixin-daemon/accounts/`（默认 `~/.local/share/pi-weixin-daemon/accounts/`，可用 `PI_WEIXIN_DATA_DIR` 覆盖），不写入项目。
 
 ### 2. 诊断
 
