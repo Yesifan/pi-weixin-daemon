@@ -3,119 +3,145 @@ import path from "node:path";
 import { PiRuntime } from "./agent/runtime.js";
 import { createWeixinRuntimeExtension } from "./agent/runtime-extension.js";
 import { WeixinUIContext } from "./agent/ui-context.js";
-import { MultiAccountTransport } from "./bridge/multi-account-transport.js";
-import { Bridge } from "./bridge/router.js";
-import type { Logger } from "./util/logger.js";
-import { loadWeixinAccount } from "./weixin/auth/accounts.js";
+import { AccountManager } from "./accounts/account-manager.js";
+import type { InboundMessage, WeixinTransport } from "./bridge/types.js";
+import { migrateLegacyAccounts } from "./config/paths.js";
+import { ProjectManager } from "./projects/project-manager.js";
+import type {
+  ProjectRuntimeFactory,
+  ProjectRuntimeFactoryContext,
+} from "./projects/project-runtime.js";
+import { ProjectStore } from "./projects/project-store.js";
+import type { ProjectStoreData } from "./projects/types.js";
+import { loadWeixinAccount, listIndexedWeixinAccountIds } from "./weixin/auth/accounts.js";
 import { ILinkWeixinTransport } from "./weixin/transport.js";
+import type { Logger } from "./util/logger.js";
 
-export interface DaemonOptions {
-  /** Project working directory. One daemon = one project. */
-  cwd: string;
-  /** Weixin account ids to monitor. Multiple accounts share one AgentSession. */
-  accounts: string[];
+export interface DaemonDeps {
   logger: Logger;
+  /** Inject for tests; default reads from ProjectStore. */
+  store?: ProjectStore;
+  /** Inject for tests; default builds a real ILinkWeixinTransport per account. */
+  getAccountTransport?: (
+    accountId: string,
+    token?: string,
+    baseUrl?: string,
+  ) => Promise<WeixinTransport>;
+  /** Inject for tests; default builds a real PiRuntime bound to the project cwd. */
+  projectPiFactory?: ProjectRuntimeFactory;
 }
 
+/** Default project Pi factory: weixin tool + UI context wired to the project bridge. */
+async function createProjectPiRuntime(ctx: ProjectRuntimeFactoryContext): Promise<PiRuntime> {
+  const { cwd, transport, bridge, logger } = ctx;
+  const tmpDir = path.join(cwd, ".pi-weixin", "tmp");
+  const inboxDir = path.join(cwd, ".pi-weixin", "inbox");
+  fs.mkdirSync(tmpDir, { recursive: true });
+  fs.mkdirSync(inboxDir, { recursive: true });
+  return new PiRuntime({
+    cwd,
+    logger,
+    extensionFactories: [
+      createWeixinRuntimeExtension({
+        transport,
+        getCurrentTurn: () => bridge.getCurrentTurn(),
+        cwd,
+        tmpDir,
+        logger,
+      }),
+    ],
+    uiContext: new WeixinUIContext({
+      broker: bridge,
+      transport,
+      getCurrentTurn: () => bridge.getCurrentTurn(),
+      logger,
+    }),
+  });
+}
+
+const defaultProjectPiFactory: ProjectRuntimeFactory = (ctx) => createProjectPiRuntime(ctx);
+
 /**
- * pi-weixin-daemon composition root.
+ * pi-weixin-daemon composition root (one long-running daemon, many projects).
  *
- * Owns: weixin transports (one per account) -> bridge (busy state, TurnContext,
- * command routing) -> Pi AgentSessionRuntime (bound to `cwd`).
+ * Owns: config (ProjectStore) -> AccountManager (per-account transports) ->
+ * ProjectManager (ProjectRuntime per project) -> account->project dispatch.
+ * Graceful shutdown stops projects first, then account monitors.
  */
 export class Daemon {
   private stopped = false;
   private keepAlive: NodeJS.Timeout | undefined;
   private readonly shutdownPromise: Promise<void>;
   private resolveShutdown!: () => void;
-  private runtime: PiRuntime | undefined;
-  private bridge: Bridge | undefined;
-  private transports: ILinkWeixinTransport[] = [];
-  private multiTransport = new MultiAccountTransport();
+  private config!: ProjectStoreData;
+  private readonly accountManager: AccountManager;
+  private readonly projectManager: ProjectManager;
+  private readonly store: ProjectStore;
+  private accountTransport: (
+    accountId: string,
+    token?: string,
+    baseUrl?: string,
+  ) => Promise<WeixinTransport>;
 
-  constructor(private readonly opts: DaemonOptions) {
+  constructor(private readonly deps: DaemonDeps) {
+    this.store = deps.store ?? new ProjectStore();
+    const logger = deps.logger;
+    this.accountManager = new AccountManager({ logger });
+    this.projectManager = new ProjectManager({
+      getTransport: (id) => this.accountManager.getTransport(id),
+      factory: deps.projectPiFactory ?? defaultProjectPiFactory,
+      logger,
+    });
+    this.accountTransport =
+      deps.getAccountTransport ??
+      ((accountId, token, baseUrl) =>
+        Promise.resolve(
+          new ILinkWeixinTransport({
+            accountId,
+            token,
+            baseUrl,
+            resolveInboxDir: (id) => this.resolveInboxDir(id),
+            logger,
+          }),
+        ));
     this.shutdownPromise = new Promise((resolve) => {
       this.resolveShutdown = resolve;
     });
   }
 
-  get cwd(): string {
-    return this.opts.cwd;
-  }
-
-  get accounts(): readonly string[] {
-    return this.opts.accounts;
+  /** The live project statuses (for RPC / project list). */
+  getProjectStatuses() {
+    return this.projectManager.listStatuses();
   }
 
   async start(): Promise<void> {
-    const { logger, cwd, accounts } = this.opts;
-    logger.info({ cwd, accounts }, "daemon starting");
+    const { logger } = this.deps;
+    migrateLegacyAccounts();
+    this.config = this.store.read();
+    logger.info({ projects: Object.keys(this.config.projects).length }, "daemon starting");
 
-    // Keep the event loop alive so the daemon runs until stop() is called.
+    // Keep the event loop alive until stop().
     this.keepAlive = setInterval(() => {}, 1 << 30);
 
-    // --- Project-local daemon directories (media inbox + outbound staging) ---
-    const inboxDir = path.join(cwd, ".pi-weixin", "inbox");
-    const tmpDir = path.join(cwd, ".pi-weixin", "tmp");
-    fs.mkdirSync(inboxDir, { recursive: true });
-    fs.mkdirSync(tmpDir, { recursive: true });
-    ensurePiWeixinGitignore(cwd, logger);
-
-    // --- Weixin transports (M5): one long-poll monitor per account ---
-    for (const accountId of accounts) {
+    // --- Account monitors: one per registered account, independent of project ---
+    for (const accountId of listIndexedWeixinAccountIds()) {
       const account = loadWeixinAccount(accountId);
       if (!account?.token) {
-        throw new Error(
-          `account "${accountId}" has no saved token; run \`pi-weixin-daemon login\` first`,
-        );
+        logger.warn({ account: accountId }, "account has no token, skipping monitor");
+        continue;
       }
-      const transport = new ILinkWeixinTransport({
-        accountId,
-        token: account.token,
-        inboxDir,
-        logger,
-      });
-      await transport.start();
-      this.transports.push(transport);
-      this.multiTransport.register(accountId, transport);
+      const transport = await this.accountTransport(accountId, account.token, account.baseUrl);
+      await this.accountManager.register(accountId, transport, account.userId);
     }
 
-    // --- Bridge (M6): routes inbound messages; runtime bound below ---
-    this.bridge = new Bridge({ transport: this.multiTransport, logger });
+    // --- Project runtimes: reconcile desired state (enabled) from config ---
+    await this.projectManager.sync(this.configList());
 
-    // --- Pi runtime (M2) + weixin runtime extension (M3) + weixin UI (M9) ---
-    // weixin_send_file routes through the multi-account facade, so it always
-    // lands on the transport owning the current turn's account.
-    this.runtime = new PiRuntime({
-      cwd,
-      logger,
-      extensionFactories: [
-        createWeixinRuntimeExtension({
-          transport: this.multiTransport,
-          getCurrentTurn: () => this.bridge?.getCurrentTurn(),
-          cwd,
-          tmpDir,
-          logger,
-        }),
-      ],
-      uiContext: new WeixinUIContext({
-        broker: this.bridge,
-        transport: this.multiTransport,
-        getCurrentTurn: () => this.bridge?.getCurrentTurn(),
-        logger,
-      }),
-    });
-    await this.runtime.start();
-
-    // Bind bridge to runtime and start listening for inbound messages.
-    this.bridge.bindRuntime(this.runtime);
-    this.bridge.attach();
+    // --- Inbound dispatch: account -> project -> runtime ---
+    this.accountManager.onInbound((msg) => this.projectManager.dispatch(msg.accountId, msg));
 
     logger.info(
-      {
-        accounts: this.transports.length,
-        session: this.runtime.getStatus().sessionFile,
-      },
+      { accounts: this.accountManager.listAccounts().length, projects: this.getProjectStatuses().length },
       "daemon started",
     );
   }
@@ -123,50 +149,45 @@ export class Daemon {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
-    const { logger } = this.opts;
+    const { logger } = this.deps;
     logger.info("daemon stopping");
 
-    this.bridge?.detach();
-    await this.multiTransport.stop().catch((err: unknown) => logger.warn({ err }, "multi transport stop error"));
-
-    for (const transport of this.transports) {
-      await transport.stop().catch((err: unknown) => logger.warn({ err }, "transport stop error"));
-    }
-    this.transports = [];
-
-    await this.runtime?.stop().catch((err: unknown) => logger.warn({ err }, "runtime stop error"));
-    this.runtime = undefined;
+    await this.projectManager.stopAll().catch((err: unknown) =>
+      logger.warn({ err }, "projectManager stop error"),
+    );
+    await this.accountManager.stopAll().catch((err: unknown) =>
+      logger.warn({ err }, "accountManager stop error"),
+    );
 
     if (this.keepAlive) clearInterval(this.keepAlive);
     logger.info("daemon stopped");
     this.resolveShutdown();
   }
 
-  /** Resolves once stop() has completed. Keeps the process alive while running. */
   waitForShutdown(): Promise<void> {
     return this.shutdownPromise;
   }
-}
 
-/**
- * Make sure the project git repo ignores the daemon's .pi-weixin/ directory
- * (media inbox + staging). Best-effort; never rewrites existing entries.
- */
-function ensurePiWeixinGitignore(cwd: string, logger: Logger): void {
-  try {
-    const gitignorePath = path.join(cwd, ".gitignore");
-    const entry = ".pi-weixin/";
-    let content = "";
-    if (fs.existsSync(gitignorePath)) {
-      content = fs.readFileSync(gitignorePath, "utf-8");
-    }
-    if (content.split(/\r?\n/).some((line) => line.trim() === entry)) {
-      return;
-    }
-    const updated = content.endsWith("\n") || content === "" ? `${content}${entry}\n` : `${content}\n${entry}\n`;
-    fs.writeFileSync(gitignorePath, updated, "utf-8");
-    logger.info({ gitignorePath }, "added .pi-weixin/ to project .gitignore");
-  } catch (err) {
-    logger.warn({ err }, "failed to update project .gitignore");
+  /** Reconcile projects + rebuild the account inbox routing after config change. */
+  async reload(): Promise<void> {
+    this.config = this.store.read();
+    await this.projectManager.sync(this.configList());
+  }
+
+  private configList() {
+    return Object.entries(this.config.projects).map(([name, config]) => ({ name, config }));
+  }
+
+  /** Gate + inbox resolution for an account: its project's inbox, or undefined. */
+  private resolveInboxDir(accountId: string): string | undefined {
+    const projectId = this.projectManager.getProjectIdForAccount(accountId);
+    if (!projectId) return undefined;
+    const cfg = this.config.projects[projectId];
+    if (!cfg || !cfg.enabled) return undefined;
+    return path.join(cfg.cwd, ".pi-weixin", "inbox");
+  }
+
+  getAccountStatuses() {
+    return this.accountManager.listAccounts();
   }
 }

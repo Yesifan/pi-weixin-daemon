@@ -16,8 +16,19 @@ export interface WeixinTransportOptions {
   /** API base URL; defaults to the account's stored baseUrl or the official endpoint. */
   baseUrl?: string;
   token?: string;
-  /** Inbox directory for inbound media: <cwd>/.pi-weixin/inbox. */
-  inboxDir: string;
+  /**
+   * Inbox directory for inbound media: <cwd>/.pi-weixin/inbox.
+   * Multi-project: use `resolveInboxDir` instead so the inbox follows the
+   * account's current project binding (and media is gated before download).
+   */
+  inboxDir?: string;
+  /**
+   * Resolve the effective inbox directory for this account at message time.
+   * Explicitly overrides `inboxDir`. When it returns undefined, the account has
+   * no bound/active project: the whole message is dropped (no media download, no
+   * emit) — the "gate before download" rule.
+   */
+  resolveInboxDir?: (accountId: string) => string | undefined;
   logger: Logger;
   cdnBaseUrl?: string;
 }
@@ -156,10 +167,20 @@ export class ILinkWeixinTransport implements WeixinTransport {
   }
 
   private async handleInbound(raw: WeixinMessage): Promise<void> {
+    // Multi-project gate before media download: when a project inbox resolver is
+    // configured and yields no dir, the account is unbound / project disabled —
+    // drop the message entirely (never download, never emit into Pi).
+    const resolved = this.opts.resolveInboxDir?.(this.opts.accountId);
+    if (this.opts.resolveInboxDir && !resolved) {
+      this.opts.logger.debug({ accountId: this.opts.accountId }, "dropping inbound: no bound project inbox");
+      return;
+    }
+    const inboxDir = resolved ?? this.opts.inboxDir;
+
     // Media is downloaded to <inboxDir>/<messageKey>/ before normalization.
     // Download failures never block message processing (attachment skipped).
     const attachments = await downloadAttachmentsFromMessage(raw, {
-      inboxDir: this.opts.inboxDir,
+      inboxDir,
       cdnBaseUrl: this.opts.cdnBaseUrl,
       logger: this.opts.logger,
     });

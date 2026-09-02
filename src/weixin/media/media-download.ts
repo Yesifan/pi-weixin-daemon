@@ -194,12 +194,14 @@ export async function downloadMediaFromItem(
 /** Download all media items of a raw message into the inbox. */
 export async function downloadAttachmentsFromMessage(
   raw: WeixinMessage,
-  deps: { inboxDir: string; cdnBaseUrl?: string; logger: Logger },
+  deps: { inboxDir?: string; cdnBaseUrl?: string; logger: Logger },
 ): Promise<InboundAttachment[]> {
+  // No inbox => no place to persist inbound media; drop attachments (text still flows).
+  if (!deps.inboxDir) return [];
   const messageKey = String(raw.message_id ?? raw.client_id ?? Date.now());
   const attachments: InboundAttachment[] = [];
   for (const item of raw.item_list ?? []) {
-    const result = await downloadMediaFromItem(item, { ...deps, messageKey });
+    const result = await downloadMediaFromItem(item, { ...deps, messageKey, inboxDir: deps.inboxDir });
     if (result) attachments.push(result);
   }
   return attachments;
