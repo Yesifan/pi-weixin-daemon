@@ -16,7 +16,7 @@ function run(cmd: string, args: string[], opts: { passthrough?: boolean } = {}):
   });
 }
 
-/** `pi-weixin-daemon start` — systemctl --user start pi-weixin-daemon */
+/** `pi-wx start` — systemctl --user start pi-weixin-daemon */
 export function startCommand(): Command {
   return new Command("start")
     .description("Start the daemon via systemd --user")

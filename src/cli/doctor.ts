@@ -19,7 +19,7 @@ interface Check {
 const MIN_NODE_MAJOR = 22;
 const MIN_NODE_MINOR = 19;
 
-/** `pi-weixin-daemon doctor [--cwd <path>] [--account <id>...]` */
+/** `pi-wx doctor [--cwd <path>] [--account <id>...]` */
 export function doctorCommand(): Command {
   const collect = (value: string, previous: string[]) => [...previous, value];
 
@@ -97,7 +97,7 @@ export function doctorCommand(): Command {
         checks.push({
           name: "weixin accounts",
           ok: false,
-          detail: "none logged in; run `pi-weixin-daemon login`",
+          detail: "none logged in; run `pi-wx login`",
         });
       } else {
         for (const accountId of accountIds) {
@@ -108,7 +108,7 @@ export function doctorCommand(): Command {
             ok: hasToken,
             detail: hasToken
               ? `token ok, baseUrl=${resolveWeixinBaseUrl(accountId)}${data?.userId ? `, user=${data.userId}` : ""}`
-              : "missing token; run `pi-weixin-daemon login`",
+              : "missing token; run `pi-wx login`",
           });
         }
       }

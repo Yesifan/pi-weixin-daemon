@@ -63,7 +63,7 @@ pnpm build && pnpm install -g ./   # 改源码后更新
 pnpm build
 pnpm pack --pack-destination release   # 产物集中放 release/
 pnpm install -g ./release/pi-weixin-daemon-*.tgz
-# 更新：重跑 pnpm build && pnpm pack && pnpm install -g ./release/pi-weixin-daemon-*.tgz
+# 更新：重跑 pnpm build && pnpm pack --pack-destination release && pnpm install -g ./release/pi-weixin-daemon-*.tgz
 ```
 
 tarball 自带 dist 与依赖（在全局 store），安装后**不依赖 repo 目录**。

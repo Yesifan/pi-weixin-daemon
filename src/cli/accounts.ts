@@ -3,7 +3,7 @@ import type { AccountInfo } from "../projects/types.js";
 import { rpcCall } from "./rpc-client.js";
 
 /**
- * `pi-weixin-daemon accounts`
+ * `pi-wx accounts`
  *
  * Read account status from the running daemon (RPC). Shows online/offline state
  * and the project each account is bound to.
@@ -14,7 +14,7 @@ export function accountsCommand(): Command {
     .action(async () => {
       const accounts = await rpcCall<AccountInfo[]>("account.list");
       if (accounts.length === 0) {
-        console.log("No accounts. Run `pi-weixin-daemon login` to add one (then the daemon picks it up).");
+        console.log("No accounts. Run `pi-wx login` to add one (then the daemon picks it up).");
         return;
       }
       console.log("ACCOUNT       STATUS          USER              PROJECT");

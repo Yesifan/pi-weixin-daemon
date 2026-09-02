@@ -10,9 +10,9 @@ import { serviceCommand } from "./service.js";
 export function buildProgram(): Command {
   const program = new Command();
   program
-    .name("pi-weixin-daemon")
+    .name("pi-wx")
     .description("Connect Weixin iLink Bot with Pi Coding Agent (multi-project daemon)")
-    .version("0.2.0");
+    .version("0.3.0");
   program.addCommand(serveCommand());
   program.addCommand(serviceCommand());
   program.addCommand(startCommand());

@@ -35,7 +35,7 @@ function resolveCliEntry(): string {
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
-  throw new Error("cannot resolve pi-weixin-daemon CLI entry path; is the package installed?");
+  throw new Error("cannot resolve pi-wx CLI entry path; is the package installed?");
 }
 
 function resolveUnitPath(): string {
@@ -77,7 +77,7 @@ export function serviceCommand(): Command {
       fs.writeFileSync(unitPath, buildUnit(), "utf-8");
       console.log(`Wrote ${unitPath}`);
       console.log(`  ExecStart=${resolveCliEntry()}`);
-      console.log("Next: `systemctl --user daemon-reload` then `pi-weixin-daemon start`.");
+      console.log("Next: `systemctl --user daemon-reload` then `pi-wx start`.");
       console.log(
         "To keep it running without a login shell: `loginctl enable-linger $USER` (do NOT use sudo).",
       );

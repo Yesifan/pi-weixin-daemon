@@ -57,7 +57,7 @@ export function validateProjectStoreData(raw: unknown): ProjectStoreValidationRe
   for (const [name, proj] of Object.entries(data.projects)) {
     for (const acc of proj.accounts) {
       if (!registered.has(acc)) {
-        errors.push(`project "${name}": account "${acc}" is not registered (run \`pi-weixin-daemon login\` first)`);
+        errors.push(`project "${name}": account "${acc}" is not registered (run \`pi-wx login\` first)`);
       }
       const existing = owner.get(acc);
       if (existing && existing !== name) {
@@ -93,7 +93,7 @@ export function validateProjectForInsert(
   const registered = new Set(listIndexedWeixinAccountIds());
   for (const acc of proj.accounts) {
     if (!registered.has(acc)) {
-      errors.push(`account "${acc}" is not registered (run \`pi-weixin-daemon login\` first)`);
+      errors.push(`account "${acc}" is not registered (run \`pi-wx login\` first)`);
     }
     for (const [pid, other] of Object.entries(data.projects)) {
       if (pid !== name && other.accounts.includes(acc)) {

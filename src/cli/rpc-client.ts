@@ -4,7 +4,7 @@ import { resolveDaemonSocket } from "../config/paths.js";
 
 export class DaemonNotRunningError extends Error {
   constructor() {
-    super("Daemon is not running.\nStart it with:\n  pi-weixin-daemon start");
+    super("Daemon is not running.\nStart it with:\n  pi-wx start");
     this.name = "DaemonNotRunningError";
   }
 }

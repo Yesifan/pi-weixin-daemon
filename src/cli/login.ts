@@ -10,14 +10,14 @@ import { redactToken } from "../weixin/util/redact.js";
 import { createLogger } from "../util/logger.js";
 
 /**
- * `pi-weixin-daemon login`
+ * `pi-wx login`
  *
  * QR-code login. Each invocation adds one Weixin account; run it again to
  * add another account. Credentials are stored under the daemon state dir
  * (~/.local/state/pi-weixin-daemon/), never inside the project.
  */
 /**
- * `pi-weixin-daemon login`
+ * `pi-wx login`
  *
  * QR-code login. Each invocation adds one Weixin account; run it again to add
  * another. The account id is the server-assigned `ilink_bot_id` (stable routing
@@ -70,7 +70,7 @@ export function loginCommand(): Command {
         // Best-effort: ask a running daemon to pick up the new account now.
         try {
           await import("./rpc-client.js").then(({ rpcCall }) => rpcCall("account.reload"));
-          console.log(`运行 \`pi-weixin-daemon accounts\` 查看全部账号。`);
+          console.log(`运行 \`pi-wx accounts\` 查看全部账号。`);
         } catch {
           console.log(`Daemon 未运行；账号已保存，下次启动时自动加载。`);
         }

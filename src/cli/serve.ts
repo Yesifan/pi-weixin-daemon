@@ -24,7 +24,7 @@ export function installSignalHandlers(daemon: Daemon, logger: ReturnType<typeof 
 }
 
 /**
- * `pi-weixin-daemon serve`
+ * `pi-wx serve`
  *
  * Foreground daemon — no fork, no self-managed pidfile. Owns the account
  * monitors and the project runtimes, and reconciles desired-state from config.
