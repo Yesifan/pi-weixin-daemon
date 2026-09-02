@@ -21,6 +21,8 @@
       └─────────────────────────┘
 ```
 
+> 路由的完整说明(用户 → 项目 → 会话,面向非读者)见 [`docs/routing.md`](docs/routing.md)。
+
 ## 特性
 
 - **一个 daemon = 多 project**：一次 `serve` 长期运行，一个 Project 绑定一个 Pi 会话（`ProjectRuntime`），按需启停（`project enable` / `disable`）。
