@@ -23,6 +23,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 ### Added
 
 - `project <name> add <label>` / `project <name> remove <label>`：按 `name` 定位账号，落库存 `ilink_bot_id`，展示按 `name`。
+- `service install` 的 unit 增加 `EnvironmentFile=-%h/.config/pi-weixin-daemon/env`（`-` 前缀：缺失不致命；用于覆盖 shell 环境变量，例如模型 API key）。
 - `accounts` 输出新增 `NAME`（`--name` 标识）与 `SINCE`（登录时间 `savedAt`）。
 - `doctor` 新增「模型可用性检查」：解析 `defaultProvider` / `defaultModel`，判断该 provider 是否已配凭据。
 

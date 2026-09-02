@@ -58,6 +58,8 @@ function buildUnit(): string {
     "Restart=on-failure",
     "RestartSec=3",
     "TimeoutStopSec=15",
+    // Optional model-API-key env (e.g. DEEPSEEK_API_KEY); `-` = OK if missing.
+    "EnvironmentFile=-%h/.config/pi-weixin-daemon/env",
     "",
     "[Install]",
     "WantedBy=default.target",
@@ -77,6 +79,7 @@ export function serviceCommand(): Command {
       fs.writeFileSync(unitPath, buildUnit(), "utf-8");
       console.log(`Wrote ${unitPath}`);
       console.log(`  ExecStart=${resolveCliEntry()}`);
+      console.log("  EnvironmentFile=~/.config/pi-weixin-daemon/env");
       console.log("Next: `systemctl --user daemon-reload` then `pi-wx start`.");
       console.log(
         "To keep it running without a login shell: `loginctl enable-linger $USER` (do NOT use sudo).",
