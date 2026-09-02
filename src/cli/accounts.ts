@@ -1,26 +1,27 @@
 import { Command } from "commander";
-import { listIndexedWeixinAccountIds, loadWeixinAccount } from "../weixin/auth/accounts.js";
-import { createLogger } from "../util/logger.js";
+import type { AccountInfo } from "../projects/types.js";
+import { rpcCall } from "./rpc-client.js";
 
 /**
  * `pi-weixin-daemon accounts`
  *
- * Show currently logged-in Weixin accounts.
+ * Read account status from the running daemon (RPC). Shows online/offline state
+ * and the project each account is bound to.
  */
 export function accountsCommand(): Command {
   return new Command("accounts")
-    .description("List logged-in Weixin accounts")
+    .description("List Weixin accounts (from the running daemon)")
     .action(async () => {
-      const logger = createLogger({ pretty: true });
-      const ids = listIndexedWeixinAccountIds();
-      if (ids.length === 0) {
-        console.log("No accounts. Run `pi-weixin-daemon login` to add one.");
+      const accounts = await rpcCall<AccountInfo[]>("account.list");
+      if (accounts.length === 0) {
+        console.log("No accounts. Run `pi-weixin-daemon login` to add one (then the daemon picks it up).");
         return;
       }
-      for (const id of ids) {
-        const data = loadWeixinAccount(id);
-        console.log(`- ${id}${data?.userId ? ` (user=${data.userId})` : ""}`);
+      console.log("ACCOUNT       STATUS          USER              PROJECT");
+      for (const a of accounts) {
+        const user = a.userId ?? "-";
+        const project = a.projectId ?? "-";
+        console.log(`${a.accountId.padEnd(14)}${a.status.padEnd(16)}${user.padEnd(18)}${project}`);
       }
-      logger.info({ count: ids.length }, "accounts listed");
     });
 }

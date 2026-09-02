@@ -112,6 +112,13 @@ export class ProjectManager {
     });
   }
 
+  /** Explicit restart: stop then start a project runtime (if desired-state on). */
+  async restart(projectId: string): Promise<void> {
+    const rt = this.runtimes.get(projectId);
+    if (!rt) throw new Error(`project "${projectId}" is not running`);
+    await rt.restart();
+  }
+
   async stopAll(): Promise<void> {
     for (const rt of [...this.runtimes.values()]) {
       await rt.stop().catch(() => {});

@@ -35,7 +35,7 @@ export function serveCommand(): Command {
     .description("Run the daemon in the foreground (manages accounts + projects)")
     .action(async () => {
       const logger = createLogger({ pretty: process.stdout.isTTY });
-      const daemon = new Daemon({ logger });
+      const daemon = new Daemon({ logger, startRpc: true });
       installSignalHandlers(daemon, logger);
       try {
         await daemon.start();

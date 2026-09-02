@@ -58,7 +58,13 @@ export function loginCommand(): Command {
           "account saved",
         );
         console.log(`\n✅ 微信账号已保存: ${result.accountId}`);
-        console.log(`运行 \`pi-weixin-daemon accounts\` 查看全部账号。`);
+        // Best-effort: ask a running daemon to pick up the new account now.
+        try {
+          await import("./rpc-client.js").then(({ rpcCall }) => rpcCall("account.reload"));
+          console.log(`运行 \`pi-weixin-daemon accounts\` 查看全部账号。`);
+        } catch {
+          console.log(`Daemon 未运行；账号已保存，下次启动时自动加载。`);
+        }
       } else {
         console.log(result.message);
         if (!result.alreadyConnected) {

@@ -12,9 +12,10 @@ import type {
   ProjectRuntimeFactoryContext,
 } from "./projects/project-runtime.js";
 import { ProjectStore } from "./projects/project-store.js";
-import type { ProjectStoreData } from "./projects/types.js";
+import type { ProjectConfig, ProjectStoreData } from "./projects/types.js";
 import { loadWeixinAccount, listIndexedWeixinAccountIds } from "./weixin/auth/accounts.js";
 import { ILinkWeixinTransport } from "./weixin/transport.js";
+import { RpcServer } from "./daemon/rpc-server.js";
 import type { Logger } from "./util/logger.js";
 
 export interface DaemonDeps {
@@ -29,6 +30,9 @@ export interface DaemonDeps {
   ) => Promise<WeixinTransport>;
   /** Inject for tests; default builds a real PiRuntime bound to the project cwd. */
   projectPiFactory?: ProjectRuntimeFactory;
+  /** Start the UDS RPC server (default false; `serve` enables it). */
+  startRpc?: boolean;
+  rpcSocketPath?: string;
 }
 
 /** Default project Pi factory: weixin tool + UI context wired to the project bridge. */
@@ -82,6 +86,8 @@ export class Daemon {
     token?: string,
     baseUrl?: string,
   ) => Promise<WeixinTransport>;
+
+  private rpcServer: RpcServer | undefined;
 
   constructor(private readonly deps: DaemonDeps) {
     this.store = deps.store ?? new ProjectStore();
@@ -140,6 +146,12 @@ export class Daemon {
     // --- Inbound dispatch: account -> project -> runtime ---
     this.accountManager.onInbound((msg) => this.projectManager.dispatch(msg.accountId, msg));
 
+    // --- UDS RPC (control plane) ---
+    if (this.deps.startRpc) {
+      this.rpcServer = new RpcServer(this, logger, this.deps.rpcSocketPath);
+      await this.rpcServer.start();
+    }
+
     logger.info(
       { accounts: this.accountManager.listAccounts().length, projects: this.getProjectStatuses().length },
       "daemon started",
@@ -159,6 +171,11 @@ export class Daemon {
       logger.warn({ err }, "accountManager stop error"),
     );
 
+    await this.rpcServer?.stop().catch((err: unknown) =>
+      logger.warn({ err }, "rpc server stop error"),
+    );
+    this.rpcServer = undefined;
+
     if (this.keepAlive) clearInterval(this.keepAlive);
     logger.info("daemon stopped");
     this.resolveShutdown();
@@ -174,6 +191,54 @@ export class Daemon {
     await this.projectManager.sync(this.configList());
   }
 
+  // --- RPC mutation entry points (daemon is the sole config writer) ---
+
+  async addProject(name: string, config: ProjectConfig): Promise<void> {
+    this.store.upsert(name, config);
+    await this.reload();
+  }
+
+  async updateProject(name: string, changes: Partial<ProjectConfig>): Promise<void> {
+    const cfg = this.store.get(name);
+    if (!cfg) throw new Error(`project "${name}" does not exist`);
+    this.store.upsert(name, { ...cfg, ...changes });
+    await this.reload();
+  }
+
+  async setProjectEnabled(name: string, enabled: boolean): Promise<void> {
+    this.store.setEnabled(name, enabled);
+    await this.reload();
+  }
+
+  async restartProject(name: string): Promise<void> {
+    await this.projectManager.restart(name);
+  }
+
+  async removeProject(name: string): Promise<void> {
+    this.store.remove(name);
+    await this.reload();
+  }
+
+  /** Re-read the account index and register any newly logged-in accounts. */
+  async reloadAccounts(): Promise<void> {
+    for (const accountId of listIndexedWeixinAccountIds()) {
+      if (this.accountManager.has(accountId)) continue;
+      const account = loadWeixinAccount(accountId);
+      if (!account?.token) continue;
+      const transport = await this.accountTransport(accountId, account.token, account.baseUrl);
+      await this.accountManager.register(accountId, transport, account.userId);
+    }
+  }
+
+  /** Full status snapshot for `daemon.status` / diagnostics. */
+  getStatus() {
+    return {
+      version: "0.2.0",
+      projects: this.getProjectStatuses(),
+      accounts: this.getAccountStatuses(),
+    };
+  }
+
   private configList() {
     return Object.entries(this.config.projects).map(([name, config]) => ({ name, config }));
   }
@@ -187,7 +252,21 @@ export class Daemon {
     return path.join(cfg.cwd, ".pi-weixin", "inbox");
   }
 
+  /** Single project status (for RPC project.get). */
+  getProjectStatus(name: string) {
+    const st = this.getProjectStatuses().find((s) => s.name === name);
+    if (!st) throw new Error(`project "${name}" does not exist`);
+    return st;
+  }
+
   getAccountStatuses() {
-    return this.accountManager.listAccounts();
+    return this.accountManager.listAccounts({
+      userId: (id) => this.accountUser(id),
+      projectId: (id) => this.projectManager.getProjectIdForAccount(id),
+    });
+  }
+
+  private accountUser(accountId: string): string | undefined {
+    return loadWeixinAccount(accountId)?.userId;
   }
 }

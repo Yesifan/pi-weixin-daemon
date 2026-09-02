@@ -73,11 +73,15 @@ export class AccountManager {
     mgd.error = error;
   }
 
-  listAccounts(userId?: (accountId: string) => string | undefined): AccountInfo[] {
+  listAccounts(options?: {
+    userId?: (accountId: string) => string | undefined;
+    projectId?: (accountId: string) => string | undefined;
+  }): AccountInfo[] {
     return [...this.accounts.values()].map((mgd) => ({
       accountId: mgd.accountId,
       status: mgd.status,
-      userId: mgd.userId ?? userId?.(mgd.accountId),
+      userId: mgd.userId ?? options?.userId?.(mgd.accountId),
+      projectId: options?.projectId?.(mgd.accountId),
       error: mgd.error,
     }));
   }
