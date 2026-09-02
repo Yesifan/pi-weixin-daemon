@@ -7,6 +7,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.4.0]
+
+### Added
+
+- **会话空闲自动关闭**（需求①）：项目会话 10 分钟无消息后自动关闭，向项目内参与者广播一句
+  "本次会话已关闭"；下一条消息进来时**自动新建**一个会话（`ProjectRuntime` 空闲定时器 +
+  惰性 `newSession`）。
+- **发送者标记**（需求②）：入站消息交给 agent 的文本末尾追加 `-- from weixin <账号name>`
+  （`buildPromptText`）。
+- **同项目互通**（需求③）：某账号的用户发消息时，同时通知同项目内**其他**参与者，
+  内容为 `"<账号name>: 消息文本"`。
+- **回复广播**（需求④）：agent 的最终回复广播给项目内**所有**参与者（含发起者）。
+- **参与者注册表**：`ProjectRuntime` 记录每个项目下"实际发过消息的 `(accountId, senderId)` + `contextToken`"；
+  互通与广播一律用它，**不依赖 `account.userId`**（避免 `ilink_user_id ≠ from_user_id` 时出错）。
+
+### Changed
+
+- `Bridge` 增强：`BridgeDeps` 新增可选 `resolveSenderLabel` / `broadcastText`；未配置时保持 "只回发起者"。
+- **每次启动新建会话**：项目启动（含 daemon 重启）由 `SessionManager.continueRecent`（恢复最近）改为
+  `SessionManager.create`（总是新建），不再跨重启恢复上一个会话。
+- 版本号三处硬编码统一到 `src/version.ts`（读 package.json），修正 `daemon.status` 上报的旧版本号。
+
+### Docs
+
+- 新增 `docs/domain-model.md`（实体/变量术语基准）、`docs/README.md`（文档索引）。
+- 更新 `docs/routing.md`（消息流 + 术语对齐 + 互通/广播规划）、`AGENTS.md`（索引 docs）。
+
+---
+
 ## [0.3.0] - BREAKING
 
 ### BREAKING CHANGES

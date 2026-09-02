@@ -29,7 +29,14 @@
 - **一个 account 只属于一个 project**：`account → project` 单向映射；一账号绑第二个 project 会报错。未绑定 / disabled 的账号消息直接丢弃，不进入 Pi。
 - **busy / abort 是 Project 作用域**：foo 忙、foo 被 abort、foo 出错都不影响 bar（严格故障隔离）。
 - **多微信账号**：一次扫码登录一个账号，可重复添加；每个账号独立 monitor，多个账号可绑定到同一 project。
-- **TurnContext 回源**：每一轮请求记录来源（account/sender/context_token），回复、文件、UI 询问都只回到发起者。
+- **TurnContext 回源与广播**：每一轮请求记录来源（account/sender/context_token）。agent 文本回复默认回发起者；
+  项目启用广播后，回复会发给项目内**所有**参与者；文件、UI 询问仍只回到发起者。
+- **会话空闲自动关闭**：项目会话 10 分钟无消息自动关闭（广播"本次会话已关闭"），下一条消息自动新建会话。
+- **每次启动新建会话**：项目启动（含 daemon 重启）总是新建会话，**不跨重启恢复**上一个会话。
+- **发送者标记**：入站消息交给 agent 的文本末尾追加 `-- from weixin <账号name>`。
+- **同项目互通**：某账号的用户发消息时，通知同项目**其他**参与者 "`<账号name>`: 消息文本"。
+- **参与者注册表**：记录每个项目"实际发过消息的 `(accountId, senderId)` + `context_token`"，互通/广播从它取目标
+  （不依赖 `account.userId`，避免 `ilink_user_id ≠ from_user_id` 时出错）。
 - **Busy / Refuse**：不建消息队列；Agent 忙时新普通消息立即拒绝。
 - **控制命令**：`/help` `/status` `/new` `/abort` `/compact`，其中 `/status` `/abort` 在 Agent 忙时仍可用。
 - **项目自管理**：项目自己的 `.pi/settings.json`、`.pi/extensions/`、`.pi/skills/`、`AGENTS.md` 完全生效；daemon 运行时能力（`weixin_send_file`、微信 UI 适配）在内存中注入，不写入项目。
@@ -200,9 +207,9 @@ Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attrib
 corepack pnpm test          # 单元 + fake 集成 + 真 Pi SDK 集成 + UDS RPC 集成
 ```
 
-层：单元（busy 状态、命令路由、路径校验、账号存储、媒体解密）、fake 集成（A 忙不影响 B、回复只回 A、UI 路由、多 project 隔离）、真 Pi SDK 集成（项目 extension、`weixin_send_file`）、Daemon/UDS RPC 集成（project create / `<name> add` / list / enable、account.logout、DaemonNotRunningError）。
+层：单元（busy 状态、命令路由、路径校验、账号存储、媒体解密）、fake 集成（A 忙不影响 B、回复广播/互通、空闲关闭、UI 路由、多 project 隔离）、真 Pi SDK 集成（项目 extension、`weixin_send_file`）、Daemon/UDS RPC 集成（project create / `<name> add` / list / enable、account.logout、DaemonNotRunningError）。
 
-真实微信 E2E（扫码、多账号、媒体收发、重启恢复）需要真实账号，见 `test/integration/`。
+真实微信 E2E（扫码、多账号、媒体收发、重启等）需要真实账号，见 `test/integration/`。
 
 ## License
 

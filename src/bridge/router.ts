@@ -18,6 +18,10 @@ export interface BridgeDeps {
   runtime?: AgentRuntime;
   transport: WeixinTransport;
   logger: Logger;
+  /** Human label for an inbound sender (used in "-- from weixin <name>"). Optional. */
+  resolveSenderLabel?: (msg: InboundMessage) => string;
+  /** Broadcast a turn's final reply to all project participants. Optional. */
+  broadcastText?: (text: string) => Promise<void>;
 }
 
 /**
@@ -131,7 +135,7 @@ export class Bridge implements UiResponseBroker {
 
       let finalText: string;
       try {
-        await runtime.prompt(buildPromptText(msg), imagesOf(msg, log));
+        await runtime.prompt(buildPromptText(msg, this.deps.resolveSenderLabel?.(msg)), imagesOf(msg, log));
         // agent_settled may arrive just after prompt() resolves; wait for it.
         await accumulator.settled;
         finalText = accumulator.accumulatedText.trim();
@@ -145,7 +149,13 @@ export class Bridge implements UiResponseBroker {
       await this.deps.transport.setTyping(turn, false);
 
       if (finalText) {
-        await this.deps.transport.sendText(turn, finalText);
+        // ④ When a broadcast hook is provided, the project fan-outs the reply to
+        // every participant; otherwise keep current origin-only behavior.
+        if (this.deps.broadcastText) {
+          await this.deps.broadcastText(finalText);
+        } else {
+          await this.deps.transport.sendText(turn, finalText);
+        }
       }
     } finally {
       this.cancelUiWaiters("turn ended");
@@ -238,15 +248,21 @@ function describeRunError(err: unknown): string {
 
 /**
  * Build the prompt text: message text + local paths of non-image attachments
- * (files/videos/voice are referenced by path; images go as true multimodal input).
+ * (files/videos/voice are referenced by path; images go as true multimodal input),
+ * and an optional "-- from weixin <name>" sender marker.
  */
-function buildPromptText(msg: InboundMessage): string {
+function buildPromptText(msg: InboundMessage, senderLabel?: string): string {
   const parts: string[] = [msg.text ?? ""];
   for (const a of msg.attachments) {
     if (a.kind === "image") continue; // passed as ImageContent
     const label =
       a.kind === "file" ? "文件" : a.kind === "video" ? "视频文件" : "语音文件";
     parts.push(`\n[收到${label}: ${a.filename ?? a.localPath} → 本地路径 ${a.localPath}]`);
+  }
+  if (senderLabel) {
+    // Put the sender marker on its own line, preceded by a blank line.
+    parts.push("");
+    parts.push(`-- from weixin ${senderLabel}`);
   }
   return parts.join("\n");
 }

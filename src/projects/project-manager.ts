@@ -10,6 +10,10 @@ export interface ProjectManagerOptions {
   /** Build the per-project AgentRuntime (real PiRuntime or fake in tests). */
   factory: ProjectRuntimeFactory;
   logger: Logger;
+  /** Human label for an account (passed through to ProjectRuntime for markers). */
+  resolveSenderName?: (accountId: string) => string;
+  /** Idle window before a shared session auto-closes (passed through to ProjectRuntime). */
+  sessionIdleMs?: number;
 }
 
 /**
@@ -67,6 +71,8 @@ export class ProjectManager {
           transport,
           logger: this.opts.logger,
           factory: this.opts.factory,
+          resolveSenderName: this.opts.resolveSenderName,
+          sessionIdleMs: this.opts.sessionIdleMs,
         });
         this.runtimes.set(name, rt);
         try {

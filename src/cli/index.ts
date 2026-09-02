@@ -6,13 +6,14 @@ import { loginCommand } from "./login.js";
 import { projectCommand } from "./project.js";
 import { serveCommand } from "./serve.js";
 import { serviceCommand } from "./service.js";
+import { VERSION } from "../version.js";
 
 export function buildProgram(): Command {
   const program = new Command();
   program
     .name("pi-wx")
     .description("Connect Weixin iLink Bot with Pi Coding Agent (multi-project daemon)")
-    .version("0.3.0");
+    .version(VERSION);
   program.addCommand(serveCommand());
   program.addCommand(serviceCommand());
   program.addCommand(startCommand());

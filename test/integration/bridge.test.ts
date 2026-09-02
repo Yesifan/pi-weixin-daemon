@@ -206,3 +206,51 @@ describe("M8 media routing through the bridge", () => {
     await turnPromise;
   });
 });
+
+describe("M9 sender marker + broadcast hook", () => {
+  it("appends -- from weixin <name> to the prompt", async () => {
+    const runtime = new FakeAgentRuntime();
+    const transport = new FakeWeixinTransport();
+    const bridge = new Bridge({
+      transport,
+      logger,
+      resolveSenderLabel: (m) => `bot-${m.accountId}`,
+    });
+    bridge.bindRuntime(runtime);
+    bridge.attach();
+
+    const turnPromise = transport.emit(
+      makeInboundMessage({ accountId: "acct-a", senderId: "user-a", text: "hi" }),
+    );
+    await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
+    expect(runtime.prompts[0]!.text).toBe("hi\n\n-- from weixin bot-acct-a");
+
+    runtime.complete("ok");
+    await turnPromise;
+  });
+
+  it("broadcast hook gets the reply and skips the origin-only send", async () => {
+    const runtime = new FakeAgentRuntime();
+    const transport = new FakeWeixinTransport();
+    let broadcasted = "";
+    const bridge = new Bridge({
+      transport,
+      logger,
+      broadcastText: async (text) => {
+        broadcasted = text;
+      },
+    });
+    bridge.bindRuntime(runtime);
+    bridge.attach();
+
+    const turnPromise = transport.emit(
+      makeInboundMessage({ accountId: "acct-a", senderId: "user-a", text: "hi" }),
+    );
+    await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
+    runtime.complete("broadcast me");
+    await turnPromise;
+
+    expect(broadcasted).toBe("broadcast me");
+    expect(transport.sentTexts).toEqual([]); // origin send skipped when a broadcast hook is present
+  });
+});

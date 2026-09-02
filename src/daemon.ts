@@ -23,6 +23,7 @@ import {
 } from "./weixin/auth/accounts.js";
 import { ILinkWeixinTransport } from "./weixin/transport.js";
 import { RpcServer } from "./daemon/rpc-server.js";
+import { VERSION } from "./version.js";
 import type { Logger } from "./util/logger.js";
 
 export interface DaemonDeps {
@@ -104,6 +105,7 @@ export class Daemon {
       getTransport: (id) => this.accountManager.getTransport(id),
       factory: deps.projectPiFactory ?? defaultProjectPiFactory,
       logger,
+      resolveSenderName: (id) => resolveWeixinAccountName(id) ?? id,
     });
     this.accountTransport =
       deps.getAccountTransport ??
@@ -301,7 +303,7 @@ export class Daemon {
   /** Full status snapshot for `daemon.status` / diagnostics. */
   getStatus() {
     return {
-      version: "0.2.0",
+      version: VERSION,
       projects: this.getProjectStatuses(),
       accounts: this.getAccountStatuses(),
     };

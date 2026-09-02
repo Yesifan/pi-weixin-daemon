@@ -82,7 +82,7 @@ export class PiRuntime implements AgentRuntime {
     return this.opts.cwd;
   }
 
-  /** Create or resume the session for `cwd` and bind session-local subscriptions. */
+  /** Create a fresh session for `cwd` and bind session-local subscriptions. */
   async start(): Promise<void> {
     const { cwd, logger } = this.opts;
 
@@ -111,10 +111,9 @@ export class PiRuntime implements AgentRuntime {
     const runtime = await createAgentSessionRuntime(createRuntime, {
       cwd,
       agentDir: getAgentDir(),
-      // continueRecent: resume the project's most recent session, or create a
-      // new one on first run. This is what makes `daemon restart -> session
-      // restored` work without any custom persistence.
-      sessionManager: SessionManager.continueRecent(cwd),
+      // Always start a fresh session: no cross-restart resume. Each daemon start
+      // (and each project runtime start) gets a new, empty session.
+      sessionManager: SessionManager.create(cwd),
     });
     this.runtime = runtime;
 
