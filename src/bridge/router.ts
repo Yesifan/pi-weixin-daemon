@@ -67,6 +67,15 @@ export class Bridge implements UiResponseBroker {
     this.unsubscribe = undefined;
   }
 
+  /**
+   * Process a single inbound message. Called directly by the daemon's dispatcher
+   * (account -> project -> ProjectRuntime.handleMessage). In the multi-project
+   * model the bridge lists for no transport subscription; inbound arrives here.
+   */
+  ingest(msg: InboundMessage): Promise<void> {
+    return this.onMessage(msg);
+  }
+
   private async onMessage(msg: InboundMessage): Promise<void> {
     const log = this.deps.logger;
 
