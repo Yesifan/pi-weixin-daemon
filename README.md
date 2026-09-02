@@ -61,7 +61,7 @@ pnpm build && pnpm install -g ./   # 改源码后更新
 
 ```bash
 pnpm build
-pnpm pack --pack-destination release   # 产物集中放 release/（已 gitignore）
+pnpm pack --pack-destination release   # 产物集中放 release/
 pnpm install -g ./release/pi-weixin-daemon-*.tgz
 # 更新：重跑 pnpm build && pnpm pack && pnpm install -g ./release/pi-weixin-daemon-*.tgz
 ```
@@ -129,13 +129,13 @@ pi-weixin-daemon logs              # journalctl --user -u pi-weixin-daemon
 
 ## 微信内命令
 
-| 命令 | 说明 | 忙时可用 |
-|---|---|---|
-| `/help` | 显示帮助 | ✓ |
-| `/status` | 项目 / session / Agent 状态 / 模型 / thinking | ✓ |
-| `/abort` | 中止当前任务 | ✓ |
-| `/new` | 新建会话 | 仅空闲 |
-| `/compact` | 压缩会话 | 仅空闲 |
+| 命令       | 说明                                          | 忙时可用 |
+| ---------- | --------------------------------------------- | -------- |
+| `/help`    | 显示帮助                                      | ✓        |
+| `/status`  | 项目 / session / Agent 状态 / 模型 / thinking | ✓        |
+| `/abort`   | 中止当前任务                                  | ✓        |
+| `/new`     | 新建会话                                      | 仅空闲   |
+| `/compact` | 压缩会话                                      | 仅空闲   |
 
 ## Agent 能力
 
