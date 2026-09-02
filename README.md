@@ -37,19 +37,33 @@
 
 ## 安装
 
-```bash
-git clone <repo> && cd pi-weixin-daemon
-corepack pnpm install        # prepare 会自动 tsc 构建 dist
-corepack pnpm build
+方式一：直接用 pnpm（可选，跳过 corepack）——项目脚本不含任何 `corepack` 调用：
 
-# 全局安装（可选）：先构建出 dist，再安装到全局
-corepack pnpm install -g ./       # 用 `pnpm install -g ./`（或 `pnpm add -g ./`）
+```bash
+# 安装一个独立的 pnpm（任选其一）：
+npm install -g pnpm                    # 或 curl -fsSL https://get.pnpm.io/install.sh | sh -
+# 让 npm 的全局 bin（如 ~/.local/bin）在 PATH 中：
+export PATH="$(npm config get prefix)/bin:$PATH"
+
+git clone <repo> && cd pi-weixin-daemon
+pnpm install        # prepare 会自动 tsc 构建 dist
+pnpm build
+```
+
+方式二（Node 自带 corepack，默认值）：把上面的 `pnpm` 前缀换成 `corepack pnpm` 即可。
+
+两者完全等价（都是 v11.x pnpm，lockfile v9.0）。
+
+全局安装（可选）：先构建出 dist，再装到全局：
+
+```bash
+pnpm install -g ./       # 或 `pnpm add -g ./`
 # 更新：重新构建后再安装一次
-corepack pnpm build && corepack pnpm install -g ./
+pnpm build && pnpm install -g ./
 
 # 若发布到 npm 后，可直接：
-#   corepack pnpm install -g pi-weixin-daemon
-#   corepack pnpm up -g pi-weixin-daemon
+#   pnpm install -g pi-weixin-daemon
+#   pnpm up -g pi-weixin-daemon
 ```
 
 要求：Node.js >= 22.19。说明：`pnpm install -g` 需要 `dist` 已生成（`prepare`/`build`），因为全局安装默认不安装本包的 devDeps（`tsc` 不保证可用）。
