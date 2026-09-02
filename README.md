@@ -69,6 +69,18 @@ tarball 自带 dist 与依赖（进入 pnpm store），安装后**不依赖 repo
 
 > `pi-weixin-daemon service install` 会引用**当前运行的二进制**：开发装（`install -g ./`）指向仓库 `dist`，自包含装（tarball）指向全局 store。若安装报 `ERR_PNPM_PACKAGE_MANAGER_ADD_RESOLVE_LATEST / should have a @scope`，说明 tarball 不存在，先 `pnpm pack`。
 
+### npm 等价用法
+
+把 `pnpm` 换成 `npm` 即可（npm 全局 bin 目录：`$(npm config get prefix)/bin`）：
+
+```bash
+npm install -g .                        # 开发时全局安装
+npm run build && npm install -g .      # 改源码后更新
+
+# 自包含
+npm run build && npm pack --pack-destination release && npm install -g ./release/pi-weixin-daemon-*.tgz
+```
+
 ## 使用
 
 ### 1. 登录微信账号
