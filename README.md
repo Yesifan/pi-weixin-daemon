@@ -80,9 +80,11 @@ tarball 自带 dist 与依赖（在全局 store），安装后**不依赖 repo �
 
 ```bash
 pi-weixin-daemon login        # 终端显示二维码，手机扫码
-pi-weixin-daemon login        # 再次执行，添加第二个账号
-pi-weixin-daemon accounts     # 查看已登录账号
+pi-weixin-daemon login        # 再次执行，添加第二个账号（须为另一个微信用户）
+pi-weixin-daemon accounts     # 查看已登录账号（含 id）
 ```
+
+账号 id 为扫码返回的 `ilink_bot_id`（服务端分配，作为 Project 路由 key）。**同一微信用户只可扫码一次**；再次登录同一用户会替换旧账号（按 `ilink_user_id` 去重）。
 
 账号凭据保存在 `$XDG_DATA_HOME/pi-weixin-daemon/accounts/`（默认 `~/.local/share/pi-weixin-daemon/accounts/`，可用 `PI_WEIXIN_DATA_DIR` 覆盖），不写入项目。
 
@@ -99,13 +101,14 @@ pi-weixin-daemon doctor --cwd /path/to/project --account <id>
 pi-weixin-daemon service install
 pi-weixin-daemon start
 
-# 登录一个或多个微信账号（登录后可让运行中的 daemon `account.reload`）
-pi-weixin-daemon login --name personal
-pi-weixin-daemon login --name work
+# 登录微信账号（账号 id = 扫码返回的 ilink_bot_id；同一用户只可扫码一次）
+pi-weixin-daemon login        # 终端显示二维码，手机扫码
+pi-weixin-daemon login        # 再扫一个（必须是另一个微信用户）
+pi-weixin-daemon accounts     # 查看已登录账号的 id
 
-# 注册 Project 并启用
-pi-weixin-daemon project add foo --cwd ~/code/foo --account personal
-pi-weixin-daemon project add bar --cwd ~/code/bar --account work
+# 注册 Project 并启用（--account 用 accounts 列出的账号 id）
+pi-weixin-daemon project add foo --cwd ~/code/foo --account <账号id>
+pi-weixin-daemon project add bar --cwd ~/code/bar --account <另一个账号id>
 pi-weixin-daemon project enable foo
 pi-weixin-daemon project enable bar
 
