@@ -21,7 +21,7 @@ beforeEach(() => {
   socketPath = path.join(dataDir, "daemon.sock");
   process.env.PI_WEIXIN_DATA_DIR = dataDir;
   registerWeixinAccountId("acct-a");
-  saveWeixinAccount("acct-a", { token: "t-a" });
+  saveWeixinAccount("acct-a", { token: "t-a", name: "personal" });
 });
 
 afterEach(() => {
@@ -44,7 +44,7 @@ function makeDaemon(): Daemon {
 }
 
 describe("daemon UDS RPC", () => {
-  it("project add/list/enable via RPC round-trip against a running daemon", async () => {
+  it("project create/add account/enable via RPC round-trip against a running daemon", async () => {
     const daemon = makeDaemon();
     await daemon.start();
 
@@ -52,12 +52,18 @@ describe("daemon UDS RPC", () => {
     let list = await rpcCall<Array<{ name: string; state: string }>>("project.list", {}, socketPath);
     expect(list).toEqual([]);
 
-    // Add (disabled by default).
-    await rpcCall("project.add", { name: "foo", config: { cwd: projectDir, accounts: ["acct-a"], enabled: false } }, socketPath);
-    list = await rpcCall<Array<{ name: string; enabled: boolean; state: string }>>("project.list", {}, socketPath);
+    // Create (disabled by default, accounts=[]).
+    await rpcCall("project.create", { name: "foo", cwd: projectDir }, socketPath);
+    list = await rpcCall<Array<{ name: string; enabled: boolean; accounts: string[] }>>("project.list", {}, socketPath);
     expect(list).toHaveLength(1);
     expect(list[0]!.name).toBe("foo");
     expect(list[0]!.enabled).toBe(false);
+    expect(list[0]!.accounts).toEqual([]);
+
+    // Add an account by label.
+    await rpcCall("project.account.add", { name: "foo", accounts: ["personal"] }, socketPath);
+    list = await rpcCall<Array<{ name: string; accounts: string[] }>>("project.list", {}, socketPath);
+    expect(list[0]!.accounts).toEqual(["personal"]);
 
     // Enable -> runtime starts.
     await rpcCall("project.enable", { name: "foo" }, socketPath);
@@ -72,6 +78,11 @@ describe("daemon UDS RPC", () => {
     );
     expect(status.version).toBeTruthy();
     expect(status.projects).toHaveLength(1);
+
+    // Remove account by label.
+    await rpcCall("project.account.remove", { name: "foo", accounts: ["personal"] }, socketPath);
+    list = await rpcCall<Array<{ name: string; accounts: string[] }>>("project.list", {}, socketPath);
+    expect(list[0]!.accounts).toEqual([]);
 
     // Remove.
     await rpcCall("project.remove", { name: "foo" }, socketPath);

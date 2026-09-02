@@ -104,16 +104,22 @@ export class RpcServer {
         return this.daemon.getProjectStatuses();
       case "project.get":
         return this.daemon.getProjectStatus(params.name as string);
-      case "project.add":
-        await this.daemon.addProject(
-          params.name as string,
-          params.config as { cwd: string; accounts: string[]; enabled: boolean },
-        );
+      case "project.create":
+        await this.daemon.createProject(params.name as string, params.cwd as string);
         return this.daemon.getProjectStatuses();
       case "project.set":
-        await this.daemon.updateProject(
+        await this.daemon.setProjectCwd(params.name as string, params.cwd as string);
+        return this.daemon.getProjectStatuses();
+      case "project.account.add":
+        await this.daemon.addProjectAccounts(
           params.name as string,
-          (params.changes ?? {}) as { cwd?: string; accounts?: string[] },
+          (params.accounts ?? []) as string[],
+        );
+        return this.daemon.getProjectStatuses();
+      case "project.account.remove":
+        await this.daemon.removeProjectAccounts(
+          params.name as string,
+          (params.accounts ?? []) as string[],
         );
         return this.daemon.getProjectStatuses();
       case "project.enable":

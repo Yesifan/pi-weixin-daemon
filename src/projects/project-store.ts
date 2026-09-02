@@ -82,6 +82,36 @@ export class ProjectStore {
     this.write(data);
   }
 
+  /** Append account ids to a project (dedup + cross-project uniqueness). */
+  addAccounts(name: string, accountIds: string[]): void {
+    const data = this.read();
+    const proj = data.projects[name];
+    if (!proj) throw new Error(`project "${name}" does not exist`);
+    const existing = new Set(proj.accounts);
+    const toAdd = accountIds.filter((id) => !existing.has(id));
+    if (toAdd.length === 0) return;
+    // Validate none of the new accounts are already claimed by another project.
+    for (const id of toAdd) {
+      for (const [pid, p] of Object.entries(data.projects)) {
+        if (pid !== name && p.accounts.includes(id)) {
+          throw new Error(`account "${id}" is already assigned to project "${pid}"`);
+        }
+      }
+    }
+    proj.accounts.push(...toAdd);
+    this.write(data);
+  }
+
+  /** Remove account ids from a project. */
+  removeAccounts(name: string, accountIds: string[]): void {
+    const data = this.read();
+    const proj = data.projects[name];
+    if (!proj) throw new Error(`project "${name}" does not exist`);
+    const rm = new Set(accountIds);
+    proj.accounts = proj.accounts.filter((id) => !rm.has(id));
+    this.write(data);
+  }
+
   setEnabled(name: string, enabled: boolean): void {
     const data = this.read();
     const proj = data.projects[name];

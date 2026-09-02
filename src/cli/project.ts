@@ -4,8 +4,6 @@ import { Command } from "commander";
 import type { ProjectStatus } from "../projects/types.js";
 import { formatProjectRow, rpcCall } from "./rpc-client.js";
 
-const collect = (value: string, previous: string[]) => [...previous, value];
-
 /** Resolve cwd (require exists + dir). Returns resolved absolute path. */
 function resolveCwd(cwd: string): string {
   const resolved = path.resolve(cwd);
@@ -16,84 +14,88 @@ function resolveCwd(cwd: string): string {
 }
 
 export function projectCommand(): Command {
-  const cmd = new Command("project").description("Manage projects (via daemon RPC)");
-
-  cmd
-    .command("add <name>")
-    .description("Add a project (enabled=false by default)")
-    .requiredOption("--cwd <path>", "project working directory")
-    .option("--account <id>", "weixin account id to bind (repeatable)", collect, [] as string[])
-    .action(async (name: string, opts: { cwd: string; account?: string[] }) => {
-      const config = { cwd: resolveCwd(opts.cwd), accounts: opts.account ?? [], enabled: false };
-      await rpcCall("project.add", { name, config });
-      console.log(`Added project "${name}" (disabled). Enable it with \`project enable ${name}\`.`);
+  return new Command("project")
+    .description(
+      "Manage projects.\n" +
+        "  pi-wx project create <name> --cwd <path>\n" +
+        "  pi-wx project <name> add|remove <label>...\n" +
+        "  pi-wx project list|show|enable|disable|restart|remove",
+    )
+    .option("--cwd <path>", "project working directory (for create/set)")
+    .argument("<args...>")
+    .action(async (args: string[], opts: { cwd?: string }) => {
+      const [first, ...rest] = args;
+      if (!first) {
+        console.error("usage: pi-wx project <verb|name> ...");
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        await dispatch(first, rest, opts);
+      } catch (err) {
+        console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+      }
     });
+}
 
-  cmd
-    .command("list")
-    .description("List projects")
-    .action(async () => {
+async function dispatch(first: string, rest: string[], opts: { cwd?: string }): Promise<void> {
+  const name = rest[0];
+  switch (first) {
+    case "list": {
       const list = await rpcCall<ProjectStatus[]>("project.list");
       if (list.length === 0) {
-        console.log("No projects. Add one with `project add <name> --cwd <path> --account <id>`.");
+        console.log("No projects. Add one with `project create <name> --cwd <path>`.");
         return;
       }
       console.log("NAME         STATE      ENABLED   ACCOUNTS             CWD");
       for (const p of list) console.log(formatProjectRow(p));
-    });
-
-  cmd
-    .command("show <name>")
-    .description("Show one project")
-    .action(async (name: string) => {
+      return;
+    }
+    case "create": {
+      if (!name || !opts.cwd) {
+        throw new Error("usage: project create <name> --cwd <path>");
+      }
+      const cwd = resolveCwd(opts.cwd);
+      await rpcCall("project.create", { name, cwd });
+      console.log(`Created project "${name}" (disabled). Enable it with \`project enable ${name}\`.`);
+      return;
+    }
+    case "show": {
+      if (!name) throw new Error("usage: project show <name>");
       const p = await rpcCall<ProjectStatus>("project.get", { name });
       console.log(formatProjectRow(p));
-    });
-
-  cmd
-    .command("set <name>")
-    .description("Update a project (cwd and/or accounts)")
-    .option("--cwd <path>", "project working directory")
-    .option("--account <id>", "replace accounts with these ids (repeatable)", collect, [] as string[])
-    .action(async (name: string, opts: { cwd?: string; account?: string[] }) => {
-      const changes: Record<string, unknown> = {};
-      if (opts.cwd) changes.cwd = resolveCwd(opts.cwd);
-      if (opts.account) changes.accounts = opts.account;
-      await rpcCall("project.set", { name, changes });
-      console.log(`Updated project "${name}".`);
-    });
-
-  cmd
-    .command("enable <name>")
-    .description("Enable (start maintaining) a project")
-    .action(async (name: string) => {
-      await rpcCall("project.enable", { name });
-      console.log(`Enabled project "${name}".`);
-    });
-
-  cmd
-    .command("disable <name>")
-    .description("Disable (stop) a project")
-    .action(async (name: string) => {
-      await rpcCall("project.disable", { name });
-      console.log(`Disabled project "${name}".`);
-    });
-
-  cmd
-    .command("restart <name>")
-    .description("Restart a project runtime")
-    .action(async (name: string) => {
-      await rpcCall("project.restart", { name });
-      console.log(`Restarted project "${name}".`);
-    });
-
-  cmd
-    .command("remove <name>")
-    .description("Remove a project")
-    .action(async (name: string) => {
-      await rpcCall("project.remove", { name });
-      console.log(`Removed project "${name}".`);
-    });
-
-  return cmd;
+      return;
+    }
+    case "set": {
+      if (!name || !opts.cwd) throw new Error("usage: project set <name> --cwd <path>");
+      await rpcCall("project.set", { name, cwd: resolveCwd(opts.cwd) });
+      console.log(`Updated cwd for project "${name}".`);
+      return;
+    }
+    case "enable":
+    case "disable":
+    case "restart":
+    case "remove": {
+      if (!name) throw new Error(`usage: project ${first} <name>`);
+      await rpcCall(`project.${first}`, { name });
+      const past = first === "enable" ? "Enabled" : first === "disable" ? "Disabled" : first === "restart" ? "Restarted" : "Removed";
+      console.log(`${past} project "${name}".`);
+      return;
+    }
+    default: {
+      // project <name> add|remove <label>...  (first = project name, rest[0] = verb)
+      const projectName = first;
+      const verb = rest[0];
+      const labels = rest.slice(1);
+      if ((verb === "add" || verb === "remove") && labels.length > 0) {
+        await rpcCall(`project.account.${verb}`, { name: projectName, accounts: labels });
+        console.log(`${verb === "add" ? "Added" : "Removed"} account(s) ${verb === "add" ? "to" : "from"} project "${projectName}".`);
+        return;
+      }
+      throw new Error(
+        `unknown project action. Try \`project create\`, \`project ${projectName} add <label>...\`, or \`project list\`.`,
+      );
+    }
+  }
 }

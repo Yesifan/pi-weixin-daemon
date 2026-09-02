@@ -16,6 +16,7 @@ import type { ProjectConfig, ProjectStoreData } from "./projects/types.js";
 import {
   loadWeixinAccount,
   listIndexedWeixinAccountIds,
+  resolveWeixinAccountIdByName,
   resolveWeixinAccountName,
 } from "./weixin/auth/accounts.js";
 import { ILinkWeixinTransport } from "./weixin/transport.js";
@@ -119,9 +120,12 @@ export class Daemon {
     });
   }
 
-  /** The live project statuses (for RPC / project list). */
+  /** The live project statuses (for RPC / project list). account ids -> labels for display. */
   getProjectStatuses() {
-    return this.projectManager.listStatuses();
+    return this.projectManager.listStatuses().map((p) => ({
+      ...p,
+      accounts: p.accounts.map((id) => resolveWeixinAccountName(id) ?? id),
+    }));
   }
 
   async start(): Promise<void> {
@@ -197,15 +201,40 @@ export class Daemon {
 
   // --- RPC mutation entry points (daemon is the sole config writer) ---
 
-  async addProject(name: string, config: ProjectConfig): Promise<void> {
-    this.store.upsert(name, config);
+  /** Create a project (accounts=[], enabled=false). */
+  async createProject(name: string, cwd: string): Promise<void> {
+    this.store.upsert(name, { cwd, accounts: [], enabled: false });
     await this.reload();
   }
 
-  async updateProject(name: string, changes: Partial<ProjectConfig>): Promise<void> {
+  /** Update a project's cwd (accounts/enabled preserved). */
+  async setProjectCwd(name: string, cwd: string): Promise<void> {
     const cfg = this.store.get(name);
     if (!cfg) throw new Error(`project "${name}" does not exist`);
-    this.store.upsert(name, { ...cfg, ...changes });
+    this.store.upsert(name, { ...cfg, cwd });
+    await this.reload();
+  }
+
+  /** Add accounts to a project. `accounts` values are account *labels* (resolved to ilink_bot_id). */
+  async addProjectAccounts(name: string, labels: string[]): Promise<void> {
+    const ids: string[] = [];
+    for (const label of labels) {
+      const id = resolveWeixinAccountIdByName(label);
+      if (!id) throw new Error(`account "${label}" is not registered (run \`pi-wx login --name ${label}\` first)`);
+      ids.push(id);
+    }
+    this.store.addAccounts(name, ids);
+    await this.reload();
+  }
+
+  /** Remove accounts from a project. `accounts` values are account *labels*. */
+  async removeProjectAccounts(name: string, labels: string[]): Promise<void> {
+    const ids = labels.map((label) => {
+      const id = resolveWeixinAccountIdByName(label);
+      if (!id) throw new Error(`account "${label}" is not registered`);
+      return id;
+    });
+    this.store.removeAccounts(name, ids);
     await this.reload();
   }
 
