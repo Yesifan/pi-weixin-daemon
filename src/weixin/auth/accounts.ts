@@ -16,6 +16,8 @@ export const WeixinAccountDataSchema = z.object({
   baseUrl: z.string().optional(),
   /** Last linked Weixin user id from QR login (optional). */
   userId: z.string().optional(),
+  /** User-chosen account label (globally unique). The account id remains ilink_bot_id. */
+  name: z.string().optional(),
 });
 
 export type WeixinAccountData = z.infer<typeof WeixinAccountDataSchema>;
@@ -122,7 +124,7 @@ export function loadWeixinAccount(accountId: string): WeixinAccountData | null {
  */
 export function saveWeixinAccount(
   accountId: string,
-  update: { token?: string; baseUrl?: string; userId?: string },
+  update: { token?: string; baseUrl?: string; userId?: string; name?: string },
 ): void {
   const dir = resolveAccountsDir();
   fs.mkdirSync(dir, { recursive: true });
@@ -135,11 +137,16 @@ export function saveWeixinAccount(
     update.userId !== undefined
       ? update.userId.trim() || undefined
       : existing.userId?.trim() || undefined;
+  const name =
+    update.name !== undefined
+      ? update.name.trim() || undefined
+      : existing.name?.trim() || undefined;
 
   const data: WeixinAccountData = {
     ...(token ? { token, savedAt: new Date().toISOString() } : {}),
     ...(baseUrl ? { baseUrl } : {}),
     ...(userId ? { userId } : {}),
+    ...(name ? { name } : {}),
   };
 
   const filePath = resolveAccountPath(accountId);
@@ -149,6 +156,21 @@ export function saveWeixinAccount(
   } catch {
     // best-effort
   }
+}
+
+/** Resolve the account id (ilink_bot_id) for a given account label, if any. */
+export function resolveWeixinAccountIdByName(name: string): string | undefined {
+  const target = name.trim();
+  if (!target) return undefined;
+  for (const id of listIndexedWeixinAccountIds()) {
+    if (loadWeixinAccount(id)?.name?.trim() === target) return id;
+  }
+  return undefined;
+}
+
+/** Resolve the account label for a given account id (ilink_bot_id), if any. */
+export function resolveWeixinAccountName(accountId: string): string | undefined {
+  return loadWeixinAccount(accountId)?.name?.trim() || undefined;
 }
 
 /** Resolve the effective API base URL for an account. */

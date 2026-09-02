@@ -76,12 +76,16 @@ export class AccountManager {
   listAccounts(options?: {
     userId?: (accountId: string) => string | undefined;
     projectId?: (accountId: string) => string | undefined;
+    name?: (accountId: string) => string | undefined;
+    since?: (accountId: string) => string | undefined;
   }): AccountInfo[] {
     return [...this.accounts.values()].map((mgd) => ({
       accountId: mgd.accountId,
+      name: options?.name?.(mgd.accountId),
       status: mgd.status,
       userId: mgd.userId ?? options?.userId?.(mgd.accountId),
       projectId: options?.projectId?.(mgd.accountId),
+      since: options?.since?.(mgd.accountId),
       error: mgd.error,
     }));
   }

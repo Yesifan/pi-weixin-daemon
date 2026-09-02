@@ -13,7 +13,11 @@ import type {
 } from "./projects/project-runtime.js";
 import { ProjectStore } from "./projects/project-store.js";
 import type { ProjectConfig, ProjectStoreData } from "./projects/types.js";
-import { loadWeixinAccount, listIndexedWeixinAccountIds } from "./weixin/auth/accounts.js";
+import {
+  loadWeixinAccount,
+  listIndexedWeixinAccountIds,
+  resolveWeixinAccountName,
+} from "./weixin/auth/accounts.js";
 import { ILinkWeixinTransport } from "./weixin/transport.js";
 import { RpcServer } from "./daemon/rpc-server.js";
 import type { Logger } from "./util/logger.js";
@@ -263,6 +267,8 @@ export class Daemon {
     return this.accountManager.listAccounts({
       userId: (id) => this.accountUser(id),
       projectId: (id) => this.projectManager.getProjectIdForAccount(id),
+      name: (id) => resolveWeixinAccountName(id),
+      since: (id) => loadWeixinAccount(id)?.savedAt,
     });
   }
 

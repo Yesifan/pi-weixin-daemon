@@ -5,8 +5,8 @@ import { rpcCall } from "./rpc-client.js";
 /**
  * `pi-wx accounts`
  *
- * Read account status from the running daemon (RPC). Shows online/offline state
- * and the project each account is bound to.
+ * Read account status from the running daemon (RPC). Shows the account label,
+ * its ilink_bot_id, status, the bound project and login time.
  */
 export function accountsCommand(): Command {
   return new Command("accounts")
@@ -14,14 +14,18 @@ export function accountsCommand(): Command {
     .action(async () => {
       const accounts = await rpcCall<AccountInfo[]>("account.list");
       if (accounts.length === 0) {
-        console.log("No accounts. Run `pi-wx login` to add one (then the daemon picks it up).");
+        console.log("No accounts. Run `pi-wx login --name <label>` to add one.");
         return;
       }
-      console.log("ACCOUNT       STATUS          USER              PROJECT");
+      console.log("NAME        ID                         STATUS         USER              PROJECT        SINCE");
       for (const a of accounts) {
+        const name = a.name ?? a.accountId;
         const user = a.userId ?? "-";
         const project = a.projectId ?? "-";
-        console.log(`${a.accountId.padEnd(14)}${a.status.padEnd(16)}${user.padEnd(18)}${project}`);
+        const since = (a.since ?? "").length > 19 ? a.since!.slice(0, 19) : a.since ?? "-";
+        console.log(
+          `${name.padEnd(11)}${a.accountId.padEnd(26)}${a.status.padEnd(15)}${user.padEnd(17)}${project.padEnd(15)}${since}`,
+        );
       }
     });
 }

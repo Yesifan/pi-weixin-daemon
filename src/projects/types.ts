@@ -45,10 +45,15 @@ export type AccountStatus =
   | "error";
 
 export interface AccountInfo {
+  /** ilink_bot_id (the routing key). */
   accountId: string;
+  /** User-chosen label (globally unique). */
+  name?: string;
   status: AccountStatus;
   userId?: string;
   /** The project this account is bound to, if any. */
   projectId?: string;
+  /** Login time (savedAt ISO string). */
+  since?: string;
   error?: string;
 }

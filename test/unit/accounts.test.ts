@@ -7,6 +7,8 @@ import {
   listIndexedWeixinAccountIds,
   loadWeixinAccount,
   registerWeixinAccountId,
+  resolveWeixinAccountIdByName,
+  resolveWeixinAccountName,
   saveWeixinAccount,
   unregisterWeixinAccountId,
 } from "../../src/weixin/auth/accounts.js";
@@ -87,6 +89,22 @@ describe("weixin account store", () => {
     expect(cleared).toEqual(["old-acct"]);
     expect(listIndexedWeixinAccountIds()).toEqual(["new-acct"]);
     expect(loadWeixinAccount("old-acct")).toBeNull();
+  });
+
+  it("stores and resolves an account name label", () => {
+    registerWeixinAccountId("acct-a");
+    registerWeixinAccountId("acct-b");
+    saveWeixinAccount("acct-a", { token: "t-a", name: "personal" });
+    saveWeixinAccount("acct-b", { token: "t-b", name: "work" });
+
+    expect(resolveWeixinAccountName("acct-a")).toBe("personal");
+    expect(resolveWeixinAccountIdByName("personal")).toBe("acct-a");
+    expect(resolveWeixinAccountIdByName("work")).toBe("acct-b");
+    expect(resolveWeixinAccountIdByName("nope")).toBeUndefined();
+
+    // name persists across merge (saving token again keeps name)
+    saveWeixinAccount("acct-a", { token: "t-a2" });
+    expect(resolveWeixinAccountName("acct-a")).toBe("personal");
   });
 
   it("clearWeixinAccount removes all account files", () => {
