@@ -69,8 +69,6 @@ tarball 自带 dist 与依赖（进入 pnpm store），安装后**不依赖 repo
 
 > `pi-weixin-daemon service install` 会引用**当前运行的二进制**：开发装（`install -g ./`）指向仓库 `dist`，自包含装（tarball）指向全局 store。若安装报 `ERR_PNPM_PACKAGE_MANAGER_ADD_RESOLVE_LATEST / should have a @scope`，说明 tarball 不存在，先 `pnpm pack`。
 
-> `pi-weixin-daemon service install` 会引用**当前运行的二进制**（全局存储里的 `dist/index.js`，依赖随包进入 pnpm store），因此 systemd 服务不依赖某个 repo 目录。
-
 ## 使用
 
 ### 1. 登录微信账号
