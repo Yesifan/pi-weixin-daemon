@@ -9,16 +9,20 @@ import { createLogger } from "../../src/util/logger.js";
 const logger = createLogger({ level: "silent" });
 
 const OLD_ENV = process.env.PI_WEIXIN_STATE_DIR;
+const OLD_DATA = process.env.PI_WEIXIN_DATA_DIR;
 let stateDir: string;
 
 beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "monitor-state-"));
   process.env.PI_WEIXIN_STATE_DIR = stateDir;
+  process.env.PI_WEIXIN_DATA_DIR = stateDir;
 });
 
 afterEach(() => {
   if (OLD_ENV === undefined) delete process.env.PI_WEIXIN_STATE_DIR;
   else process.env.PI_WEIXIN_STATE_DIR = OLD_ENV;
+  if (OLD_DATA === undefined) delete process.env.PI_WEIXIN_DATA_DIR;
+  else process.env.PI_WEIXIN_DATA_DIR = OLD_DATA;
   fs.rmSync(stateDir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -72,7 +76,7 @@ describe("monitorWeixinProvider", () => {
       expect(onInbound).toHaveBeenCalledWith(expect.objectContaining({ context_token: "tok-2" }));
 
       // sync buf persisted (second response buf-2 wins)
-      const syncFile = path.join(stateDir, "weixin", "accounts", "acct-a.sync.json");
+      const syncFile = path.join(stateDir, "accounts", "acct-a.sync.json");
       expect(fs.existsSync(syncFile)).toBe(true);
       const saved = JSON.parse(fs.readFileSync(syncFile, "utf-8"));
       expect(saved.get_updates_buf).toBe("buf-2");
@@ -119,7 +123,7 @@ describe("monitorWeixinProvider", () => {
   it(
     "resumes from a persisted get_updates_buf",
     async () => {
-      const stateWeixin = path.join(stateDir, "weixin", "accounts");
+      const stateWeixin = path.join(stateDir, "accounts");
       fs.mkdirSync(stateWeixin, { recursive: true });
       fs.writeFileSync(
         path.join(stateWeixin, "acct-a.sync.json"),

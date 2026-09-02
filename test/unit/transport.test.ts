@@ -45,11 +45,13 @@ import { TypingStatus } from "../../src/weixin/api/types.js";
 const logger = createLogger({ level: "silent" });
 
 const OLD_ENV = process.env.PI_WEIXIN_STATE_DIR;
+const OLD_DATA = process.env.PI_WEIXIN_DATA_DIR;
 let stateDir: string;
 
 beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "transport-state-"));
   process.env.PI_WEIXIN_STATE_DIR = stateDir;
+  process.env.PI_WEIXIN_DATA_DIR = stateDir;
   apiMocks.getConfig.mockResolvedValue({ ret: 0, typing_ticket: "ticket-abc" });
   apiMocks.sendTyping.mockResolvedValue(undefined);
   apiMocks.sendMessage.mockResolvedValue(undefined);
@@ -61,6 +63,8 @@ beforeEach(() => {
 afterEach(() => {
   if (OLD_ENV === undefined) delete process.env.PI_WEIXIN_STATE_DIR;
   else process.env.PI_WEIXIN_STATE_DIR = OLD_ENV;
+  if (OLD_DATA === undefined) delete process.env.PI_WEIXIN_DATA_DIR;
+  else process.env.PI_WEIXIN_DATA_DIR = OLD_DATA;
   fs.rmSync(stateDir, { recursive: true, force: true });
   vi.clearAllMocks();
 });
@@ -152,7 +156,7 @@ describe("ILinkWeixinTransport (mocked api)", () => {
 
     expect(seen).toEqual(["user-1:hi"]);
     // context token persisted to disk for restart
-    const file = path.join(stateDir, "weixin", "accounts", "acct-a.context-tokens.json");
+    const file = path.join(stateDir, "accounts", "acct-a.context-tokens.json");
     expect(fs.existsSync(file)).toBe(true);
 
     await t.stop();

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { resolveAccountsDir, resolveStateDir, resolveWeixinStateDir } from "../storage/state-dir.js";
+import { resolveAccountsDir, resolveStateDir } from "../storage/state-dir.js";
 
 export const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 export const CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
@@ -25,7 +25,9 @@ export type WeixinAccountData = z.infer<typeof WeixinAccountDataSchema>;
 // ---------------------------------------------------------------------------
 
 function resolveAccountIndexPath(): string {
-  return path.join(resolveWeixinStateDir(), "accounts.json");
+  // Colocate the account index with per-account credential files (data dir), so
+  // the whole account store reads/writes from one place.
+  return path.join(resolveAccountsDir(), "accounts.json");
 }
 
 /** Returns all accountIds registered via QR login. */
@@ -43,7 +45,7 @@ export function listIndexedWeixinAccountIds(): string[] {
 
 /** Add accountId to the persistent index (no-op if already present). */
 export function registerWeixinAccountId(accountId: string): void {
-  const dir = resolveWeixinStateDir();
+  const dir = resolveAccountsDir();
   fs.mkdirSync(dir, { recursive: true });
 
   const existing = listIndexedWeixinAccountIds();

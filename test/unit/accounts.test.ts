@@ -11,21 +11,21 @@ import {
   unregisterWeixinAccountId,
 } from "../../src/weixin/auth/accounts.js";
 
-const OLD_ENV = process.env.PI_WEIXIN_STATE_DIR;
-let stateDir: string;
+const OLD_ENV = process.env.PI_WEIXIN_DATA_DIR;
+let dataDir: string;
 
 beforeEach(() => {
-  stateDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "state-"));
-  process.env.PI_WEIXIN_STATE_DIR = stateDir;
+  dataDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "data-"));
+  process.env.PI_WEIXIN_DATA_DIR = dataDir;
 });
 
 afterEach(() => {
   if (OLD_ENV === undefined) {
-    delete process.env.PI_WEIXIN_STATE_DIR;
+    delete process.env.PI_WEIXIN_DATA_DIR;
   } else {
-    process.env.PI_WEIXIN_STATE_DIR = OLD_ENV;
+    process.env.PI_WEIXIN_DATA_DIR = OLD_ENV;
   }
-  fs.rmSync(stateDir, { recursive: true, force: true });
+  fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
 describe("weixin account store", () => {
@@ -69,7 +69,7 @@ describe("weixin account store", () => {
   });
 
   it("rejects malformed account files (zod validation)", () => {
-    const dir = path.join(stateDir, "weixin", "accounts");
+    const dir = path.join(dataDir, "accounts");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "bad.json"), JSON.stringify({ token: 123 }), "utf-8");
     expect(loadWeixinAccount("bad")).toBeNull();
@@ -92,11 +92,11 @@ describe("weixin account store", () => {
   it("clearWeixinAccount removes all account files", () => {
     registerWeixinAccountId("acct-a");
     saveWeixinAccount("acct-a", { token: "t" });
-    const dir = path.join(stateDir, "weixin", "accounts");
+    const dir = path.join(dataDir, "accounts");
     fs.writeFileSync(path.join(dir, "acct-a.sync.json"), "{}", "utf-8");
 
     clearWeixinAccount("acct-a");
     expect(loadWeixinAccount("acct-a")).toBeNull();
-    expect(fs.existsSync(path.join(dir, "acct-a.sync.json"))).toBe(false);
+    expect(fs.existsSync(path.join(dataDir, "accounts", "acct-a.sync.json"))).toBe(false);
   });
 });
