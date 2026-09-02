@@ -9,27 +9,29 @@ const SERVICE_NAME = "pi-weixin-daemon";
 /**
  * Resolve the CLI entry file's absolute path (for systemd ExecStart), verifying it exists.
  *
- * Prefers the real module-relative entry (`dist/index.js` next to `dist/cli/*.js`) — under a
- * pnpm global install the invoked `process.argv[1]` may be a shell shim, which must not be used
- * as the ExecStart target. A `.js`/`.ts` `argv[1]` (real script) is still accepted as a fallback.
+ * Prefers the *actually-invoked* binary (`process.argv[1]`). Under a real global install
+ * (pnpm/npm install -g) this is the installed `dist/index.js` in the store — the daemon is
+ * self-contained (its deps live in the store), so the systemd unit does not tie to a repo.
+ * A shell shim (pnpm/npm global bin wrapper) is rejected; in that case we fall back to the
+ * module-relative entry, which for a loaded global module is also the store's `dist/index.js`.
  */
 function resolveCliEntry(): string {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    // Published: dist/index.js next to dist/cli/*.js
-    path.join(moduleDir, "..", "index.js"),
-    // Dev (tsx): src/index.ts next to src/cli/*.ts
-    path.join(moduleDir, "..", "index.ts"),
-  ];
-  // Accept the actually-invoked script only if it is a real JS/TS file (not a shell shim).
+  const candidates: string[] = [];
+
+  // (1) The actually-invoked binary — only accept real JS/TS files (not a shell shim).
   if (process.argv[1] && /\.(js|mjs|cjs|ts)$/i.test(process.argv[1])) {
     try {
       const invoked = fs.realpathSync(process.argv[1]);
-      if (fs.existsSync(invoked)) candidates.unshift(invoked);
+      if (fs.existsSync(invoked)) candidates.push(invoked);
     } catch {
       // ignore
     }
   }
+
+  // (2) Module-relative entry: for a globally-installed module this is the store's index.js.
+  candidates.push(path.join(moduleDir, "..", "index.js"), path.join(moduleDir, "..", "index.ts"));
+
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }

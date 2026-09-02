@@ -43,9 +43,15 @@
 git clone <repo> && cd pi-weixin-daemon
 pnpm install        # 安装依赖并自动构建 dist
 
-# （可选）全局安装：确保 pnpm 全局 bin 目录在 PATH 中即可使用 `pi-weixin-daemon`
-pnpm install -g ./        # 或用 `pnpm add -g ./`；更新时重跑 `pnpm build && pnpm install -g ./`
+# 全局安装：打出 tarball（自带 dist，自包含，不依赖 repo），再作为全局包安装
+pnpm pack
+pnpm install -g ./pi-weixin-daemon-0.2.0.tgz
+# 更新：重跑 pnpm build && pnpm pack && pnpm install -g ./...tgz
 ```
+
+全局安装后，把 pnpm 的全局 bin 目录加到 PATH（`pnpm config get global-bin-dir`，通常 `~/.local/share/pnpm/bin`）即可使用 `pi-weixin-daemon`。
+
+> `pi-weixin-daemon service install` 会引用**当前运行的二进制**（全局存储里的 `dist/index.js`，依赖随包进入 pnpm store），因此 systemd 服务不依赖某个 repo 目录。
 
 ## 使用
 
