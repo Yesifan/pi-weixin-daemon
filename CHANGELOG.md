@@ -37,13 +37,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
    pnpm install -g ./release/pi-weixin-daemon-*.tgz
    ```
    之后命令变为 `pi-wx`。
-3. **旧账号无 `name`**：需重新扫码登录并带 `--name`：
-   ```bash
-   pi-wx login --name <label>
-   ```
-   （旧账号不被迁移；重复名会报错。）
-4. **已有项目若 `accounts` 引用旧 id**：重建项目（`project create` + `project <name> add <label>`）。
-5. **systemd**：单元名未变，`systemctl --user daemon-reload` 即可；如担心可重跑 `pi-wx service install`。
+3. **处理旧版（无 `name`）账号**：
+   旧版 `login`（无 `--name`）保存的账号**只有 `ilink_bot_id`、没有 `name` 标识**。后果：
+   - `pi-wx accounts` 里 `NAME` 列显示的是 `ilink_bot_id`（无友好名）。
+   - `project <name> add <label>` 按 `name` 定位账号，**找不到这些无 name 的账号**。
+   - 已在 `project` 里引用它们的，`accounts` 数组存的是 `ilink_bot_id`（仍能路由），但无法再用 `name` 操作。
+   建议处理：
+   - 用旧的 `ilink_bot_id`：`pi-wx logout <ilink_bot_id>` 登出无需保留的；
+   - 需要保留的账号：先 `pi-wx logout <ilink_bot_id>`，再 `pi-wx login --name <label>` 重新登录（得到 `name`，可用 `project <name> add <label>` 绑定）。
+   - 旧项目若 `accounts` 还引用旧 `ilink_bot_id` 且该账号已注销，请用新 `name` 重建绑定（`project create` + `project <name> add <label>`）。
+4. **systemd**：单元名未变，`systemctl --user daemon-reload` 即可；如担心可重跑 `pi-wx service install`。
+
+> 无 `name` 的旧账号不会被迁移；`pi-wx` 对它们按 `ilink_bot_id` 展示，需按上面步骤换成带 `name` 的新账号。
 
 ---
 

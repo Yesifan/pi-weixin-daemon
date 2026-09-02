@@ -81,7 +81,8 @@ tarball 自带 dist 与依赖（在全局 store），安装后**不依赖 repo �
 ```bash
 pi-wx login --name personal    # 终端显示二维码，手机扫码（--name 必填）
 pi-wx login --name work        # 再次执行，添加第二个账号（须为另一个微信用户）
-pi-wx accounts                 # 查看已登录账号
+pi-wx accounts                 # 查看已登录账号（NAME / ID / STATUS / USER / PROJECT / SINCE）
+pi-wx logout <账号id|name>     # 登出：清凭据 + 从项目解绑 + 停 monitor
 ```
 
 `--name` 是账号标识（全局唯一）；账号 **id 仍为扫码返回的 `ilink_bot_id`**（服务端分配，作为 Project 路由 key）。**同一微信用户只可扫码一次**；再次登录同一用户会替换旧账号（按 `ilink_user_id` 去重）。
@@ -197,7 +198,7 @@ Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attrib
 corepack pnpm test          # 单元 + fake 集成 + 真 Pi SDK 集成 + UDS RPC 集成
 ```
 
-层：单元（busy 状态、命令路由、路径校验、账号存储、媒体解密）、fake 集成（A 忙不影响 B、回复只回 A、UI 路由、多 project 隔离）、真 Pi SDK 集成（项目 extension、`weixin_send_file`）、Daemon/UDS RPC 集成（project add/list/enable、DaemonNotRunningError）。
+层：单元（busy 状态、命令路由、路径校验、账号存储、媒体解密）、fake 集成（A 忙不影响 B、回复只回 A、UI 路由、多 project 隔离）、真 Pi SDK 集成（项目 extension、`weixin_send_file`）、Daemon/UDS RPC 集成（project create / `<name> add` / list / enable、account.logout、DaemonNotRunningError）。
 
 真实微信 E2E（扫码、多账号、媒体收发、重启恢复）需要真实账号，见 `test/integration/`。
 
