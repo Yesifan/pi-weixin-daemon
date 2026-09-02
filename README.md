@@ -5,28 +5,28 @@
 ```text
                  Weixin iLink
           ┌──────────┴──────────┐
-     Weixin Account A      Weixin Account B
+     Account A            Account B
           │                     │
-       Poller A              Poller B
+      AccountManager  (每账号一个 monitor，独立状态)
           └──────────┬──────────┘
                      │
-              pi-weixin-daemon
+        account→project 路由
                      │
-             AgentSessionRuntime
-                     │
-                     ▼
-                Project cwd
-                     │
-              ├─ .pi/settings.json
-              ├─ .pi/extensions/
-              ├─ .pi/skills/
-              └─ AGENTS.md
+              ProjectManager
+        ┌────────────┴────────────┐
+      ProjectRuntime foo     ProjectRuntime bar
+      │  cwd + Pi session      │  cwd + Pi session
+      │  busy/abort 作用域       │  busy/abort 作用域
+      │  weixin_send_file 注入   │  weixin_send_file 注入
+      └─────────────────────────┘
 ```
 
 ## 特性
 
-- **一个 daemon = 一个 project**：daemon 直接通过 `@earendil-works/pi-coding-agent` SDK 托管 AgentSession，绑定项目 cwd。
-- **多微信账号**：一次扫码登录一个账号，可重复添加；所有账号共享同一个 Pi session。
+- **一个 daemon = 多 project**：一次 `serve` 长期运行，一个 Project 绑定一个 Pi 会话（`ProjectRuntime`），按需启停（`project enable` / `disable`）。
+- **一个 account 只属于一个 project**：`account → project` 单向映射；一账号绑第二个 project 会报错。未绑定 / disabled 的账号消息直接丢弃，不进入 Pi。
+- **busy / abort 是 Project 作用域**：foo 忙、foo 被 abort、foo 出错都不影响 bar（严格故障隔离）。
+- **多微信账号**：一次扫码登录一个账号，可重复添加；每个账号独立 monitor，多个账号可绑定到同一 project。
 - **TurnContext 回源**：每一轮请求记录来源（account/sender/context_token），回复、文件、UI 询问都只回到发起者。
 - **Busy / Refuse**：不建消息队列；Agent 忙时新普通消息立即拒绝。
 - **控制命令**：`/help` `/status` `/new` `/abort` `/compact`，其中 `/status` `/abort` 在 Agent 忙时仍可用。
@@ -65,31 +65,37 @@ pi-weixin-daemon accounts     # 查看已登录账号
 pi-weixin-daemon doctor --cwd /path/to/project --account <id>
 ```
 
-### 3. 运行
+### 3. 启动 daemon + 注册 Project
 
 ```bash
-pi-weixin-daemon run \
-  --cwd /home/you/code/project-a \
-  --account account-a --account account-b
-```
+# 装 systemd 用户服务 + 启动（前台由 systemd 托管）
+pi-weixin-daemon service install
+pi-weixin-daemon start
 
-另一个项目启动另一个 daemon（不同 `--cwd`）。
+# 登录一个或多个微信账号（登录后可让运行中的 daemon `account.reload`）
+pi-weixin-daemon login --name personal
+pi-weixin-daemon login --name work
+
+# 注册 Project 并启用
+pi-weixin-daemon project add foo --cwd ~/code/foo --account personal
+pi-weixin-daemon project add bar --cwd ~/code/bar --account work
+pi-weixin-daemon project enable foo
+pi-weixin-daemon project enable bar
+
+# 查看
+pi-weixin-daemon project list
+pi-weixin-daemon accounts
+```
 
 ### 4. systemd（用户级）
 
 ```bash
-mkdir -p ~/.config/pi-weixin
-cat > ~/.config/pi-weixin/project-a.env <<'EOF'
-PI_WEIXIN_CWD=/home/you/code/project-a
-PI_WEIXIN_ACCOUNTS=account-a account-b
-EOF
-cp systemd/pi-weixin@.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now pi-weixin@project-a
-journalctl --user -u pi-weixin@project-a -f
+pi-weixin-daemon service install   # 写入 ~/.config/systemd/user/pi-weixin-daemon.service（解析 CLI 绝对路径，不 sudo）
+pi-weixin-daemon start             # systemctl --user start pi-weixin-daemon
+pi-weixin-daemon logs              # journalctl --user -u pi-weixin-daemon
 ```
 
-日志为 JSON 结构化输出（pino），直接适配 journald。
+日志为 JSON 结构化输出（pino），直接适配 journald。`Restart=on-failure` 会在崩溃后自动拉起；`TimeoutStopSec=15` 配合 daemon 的优雅关闭。
 
 ## 微信内命令
 
@@ -110,31 +116,36 @@ journalctl --user -u pi-weixin@project-a -f
 ## 架构
 
 ```text
-Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attribution）
+Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attribution，协议细节见 docs/ilink-protocol.md）
         │ 提供微信协议参考
         ▼
-   Weixin Transport              # src/weixin/（移植自腾讯，剥离 OpenClaw 依赖）
+   Weixin Transport / AccountManager   # src/weixin/ + src/accounts/（每账号 monitor，先门后下）
         │
         ▼
-   pi-weixin-daemon              # src/bridge/ + src/daemon.ts（薄胶水层）
-        │  TurnContext / busy state / UI bridge / runtime extension
-        ▼
- Pi AgentSession SDK             # src/agent/（仅面向官方 SDK）
-        ▼
-     Project cwd                 # .pi/extensions .pi/skills .pi/settings AGENTS.md
+   ProjectManager                      # src/projects/（Map<ProjectId, ProjectRuntime> + account→project 路由）
+        │
+        ├─ ProjectRuntime  →  Pi AgentSession SDK  →  项目 cwd
+        └─ UDS RPC（控制面）→  CLI project/service/control/login
 ```
 
-依赖方向：`weixin → bridge → agent`。`agent/` 不依赖 iLink 类型；`weixin/` 不依赖 AgentSession；只有 `daemon.ts` 做组合。
+依赖方向：`weixin → accounts/projects → agent`。`agent/` 不依赖 iLink 类型；`weixin/` 不依赖 AgentSession；`daemon.ts` 做组合。
+
+## 配置与存储（XDG）
+
+- 配置：`$XDG_CONFIG_HOME/pi-weixin-daemon/config.json`（project 配置，daemon 唯一 writer，原子写）。
+- 账号凭据：`$XDG_DATA_HOME/pi-weixin-daemon/accounts/`（凭据 + 索引；旧 `~/.local/state/pi-weixin-daemon/weixin/accounts` 会自动无损迁移）。
+- 状态：`$XDG_STATE_HOME/pi-weixin-daemon/weixin/`（sync-buf / context-token）。
+- UDS：`$XDG_RUNTIME_DIR/pi-weixin-daemon/daemon.sock`（0600）。
 
 ## 测试
 
 ```bash
-corepack pnpm test          # 单元 + fake transport 集成 + 真 Pi SDK 集成
+corepack pnpm test          # 单元 + fake 集成 + 真 Pi SDK 集成 + UDS RPC 集成
 ```
 
-三层测试：单元测试（busy 状态、命令路由、路径校验、账号存储、媒体解密等）、fake transport + fake runtime 集成（A 执行时 B 收 busy、回复只回 A、UI 路由）、真 Pi SDK + 真模型集成（项目 extension 加载、`weixin_send_file`、extension UI 经微信闭环）。
+层：单元（busy 状态、命令路由、路径校验、账号存储、媒体解密）、fake 集成（A 忙不影响 B、回复只回 A、UI 路由、多 project 隔离）、真 Pi SDK 集成（项目 extension、`weixin_send_file`）、Daemon/UDS RPC 集成（project add/list/enable、DaemonNotRunningError）。
 
-真实微信 E2E（扫码、双账号、媒体收发、重启恢复）需要真实账号，见 `test/integration/`。
+真实微信 E2E（扫码、多账号、媒体收发、重启恢复）需要真实账号，见 `test/integration/`。
 
 ## License
 
