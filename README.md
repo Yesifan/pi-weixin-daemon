@@ -37,49 +37,47 @@
 
 ## 安装
 
-要求：Node.js >= 22.19，pnpm（v11.x）。
+要求：Node.js >= 22.19，pnpm（v11.x）或 npm。
 
 ```bash
 git clone <repo> && cd pi-weixin-daemon
 pnpm install        # 安装依赖并自动构建 dist
 ```
 
-把 pnpm 的全局 bin 目录加到 PATH（`pnpm config get global-bin-dir`，通常 `~/.local/share/pnpm/bin`），即可使用 `pi-weixin-daemon`。
+全局安装建议用 **npm**（对本地路径/tarball 最稳）。npm 全局 bin 目录：`$(npm config get prefix)/bin`。
 
 ### 开发时全局安装（推荐）
 
 ```bash
-pnpm install -g ./           # 从本仓库目录全局安装，跟随仓库构建
-# 修改源码后更新：先重新构建，再装一次
-pnpm build && pnpm install -g ./
+npm install -g .               # 跟随仓库构建
+npm run build && npm install -g .   # 改源码后更新
 ```
 
-这是开发时最省事的做法：`pi-weixin-daemon` 指向仓库里的 `dist/index.js`（依赖走仓库 `node_modules`）。
+`pi-weixin-daemon` 指向仓库里的 `dist/index.js`（依赖走仓库 `node_modules`）。
 
 ### 自包含（发布/独立安装）
 
 ```bash
 pnpm build
 pnpm pack --pack-destination release   # 产物集中放 release/（已 gitignore）
-pnpm install -g ./release/pi-weixin-daemon-*.tgz
-# 更新：重跑 pnpm build && pnpm pack && pnpm install -g ./release/pi-weixin-daemon-*.tgz
+npm install -g ./release/pi-weixin-daemon-*.tgz
+# 更新：重跑 pnpm build && pnpm pack && npm install -g ./release/pi-weixin-daemon-*.tgz
 ```
 
-tarball 自带 dist 与依赖（进入 pnpm store），安装后**不依赖 repo 目录**，适合发布或独立部署。
+tarball 自带 dist 与依赖（在全局 store），安装后**不依赖 repo 目录**。
 
-> `pi-weixin-daemon service install` 会引用**当前运行的二进制**：开发装（`install -g ./`）指向仓库 `dist`，自包含装（tarball）指向全局 store。若安装报 `ERR_PNPM_PACKAGE_MANAGER_ADD_RESOLVE_LATEST / should have a @scope`，说明 tarball 不存在，先 `pnpm pack`。
+> `pi-weixin-daemon service install` 引用**当前运行的二进制**：开发装指向仓库 `dist`，自包含装指向全局 store。
 
-### npm 等价用法
+### pnpm 12 的回归
 
-把 `pnpm` 换成 `npm` 即可（npm 全局 bin 目录：`$(npm config get prefix)/bin`）：
+pnpm 12（Rust 版）把 `install -g <本地路径/tarball/file:>` 误当作 registry 包名解析，会报
+`ERR_PNPM_PACKAGE_MANAGER_ADD_RESOLVE_LATEST / should have a @scope`。规避：
 
-```bash
-npm install -g .                        # 开发时全局安装
-npm run build && npm install -g .      # 改源码后更新
+- **用 npm 安装**（npm 处理本地路径/tarball 正常）；
+- 或把 mise 的 pnpm 固定到 **11.x**：`mise use -g pnpm@11`；
+- 或 pnpm 12 用**绝对路径 alias**：`pnpm install -g "pi-weixin-daemon@file:$PWD/release/pi-weixin-daemon-0.2.0.tgz"`。
 
-# 自包含
-npm run build && npm pack --pack-destination release && npm install -g ./release/pi-weixin-daemon-*.tgz
-```
+若报 `should have a @scope`，优先确认是上面这个回归，而不是缺 tarball。
 
 ## 使用
 
