@@ -37,20 +37,22 @@
 
 ## 安装
 
-要求：Node.js >= 22.19，pnpm（v11.x）或 npm。
+要求：Node.js >= 22.19，pnpm **11.x**（本项目已用 `packageManager` 固定为 `pnpm@11.25.0`）。
+
+> ⚠️ 推荐 11.x：pnpm 12 对 `install -g <本地路径/tarball>` 有回归（会把本地路径误当 registry 包名，报 `@scope` 错）。
 
 ```bash
 git clone <repo> && cd pi-weixin-daemon
 pnpm install        # 安装依赖并自动构建 dist
 ```
 
-全局安装建议用 **npm**（对本地路径/tarball 最稳）。npm 全局 bin 目录：`$(npm config get prefix)/bin`。
+把 pnpm 全局 bin 目录加到 PATH（`pnpm config get global-bin-dir`，通常 `~/.local/share/pnpm/bin`）。
 
 ### 开发时全局安装（推荐）
 
 ```bash
-npm install -g .               # 跟随仓库构建
-npm run build && npm install -g .   # 改源码后更新
+pnpm install -g ./            # 跟随仓库构建
+pnpm build && pnpm install -g ./   # 改源码后更新
 ```
 
 `pi-weixin-daemon` 指向仓库里的 `dist/index.js`（依赖走仓库 `node_modules`）。
@@ -60,24 +62,17 @@ npm run build && npm install -g .   # 改源码后更新
 ```bash
 pnpm build
 pnpm pack --pack-destination release   # 产物集中放 release/（已 gitignore）
-npm install -g ./release/pi-weixin-daemon-*.tgz
-# 更新：重跑 pnpm build && pnpm pack && npm install -g ./release/pi-weixin-daemon-*.tgz
+pnpm install -g ./release/pi-weixin-daemon-*.tgz
+# 更新：重跑 pnpm build && pnpm pack && pnpm install -g ./release/pi-weixin-daemon-*.tgz
 ```
 
 tarball 自带 dist 与依赖（在全局 store），安装后**不依赖 repo 目录**。
 
 > `pi-weixin-daemon service install` 引用**当前运行的二进制**：开发装指向仓库 `dist`，自包含装指向全局 store。
 
-### pnpm 12 的回归
+### npm 等价用法
 
-pnpm 12（Rust 版）把 `install -g <本地路径/tarball/file:>` 误当作 registry 包名解析，会报
-`ERR_PNPM_PACKAGE_MANAGER_ADD_RESOLVE_LATEST / should have a @scope`。规避：
-
-- **用 npm 安装**（npm 处理本地路径/tarball 正常）；
-- 或把 mise 的 pnpm 固定到 **11.x**：`mise use -g pnpm@11`；
-- 或 pnpm 12 用**绝对路径 alias**：`pnpm install -g "pi-weixin-daemon@file:$PWD/release/pi-weixin-daemon-0.2.0.tgz"`。
-
-若报 `should have a @scope`，优先确认是上面这个回归，而不是缺 tarball。
+把 `pnpm` 换成 `npm`（npm 全局 bin 目录：`$(npm config get prefix)/bin`），`npm pack --pack-destination release` 与 `pnpm install -g` 分别对应 npm 的 `npm install -g`。
 
 ## 使用
 
