@@ -84,7 +84,7 @@ describe("M9 WeixinUIContext dialogs", () => {
   class FakeBroker implements UiResponseBroker {
     beginCount = 0;
     endCount = 0;
-    private waiters: Array<{ resolve: (t: string) => void; reject: (e: Error) => void }> = [];
+    private waiters: Array<{ resolve: (t: string) => void; reject: (e: Error) => void; timer?: NodeJS.Timeout }> = [];
 
     beginUiInteraction(): void {
       this.beginCount += 1;
@@ -92,14 +92,23 @@ describe("M9 WeixinUIContext dialogs", () => {
     endUiInteraction(): void {
       this.endCount += 1;
     }
-    waitForResponse(_turn: TurnContext): Promise<string> {
+    waitForResponse(_turn: TurnContext, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<string> {
       return new Promise((resolve, reject) => {
-        this.waiters.push({ resolve, reject });
+        const waiter = { resolve, reject, timer: undefined as NodeJS.Timeout | undefined };
+        this.waiters.push(waiter);
+        if (opts?.timeoutMs) {
+          waiter.timer = setTimeout(() => {
+            const idx = this.waiters.indexOf(waiter);
+            if (idx >= 0) this.waiters.splice(idx, 1);
+            reject(new Error("UI interaction timed out"));
+          }, opts.timeoutMs);
+        }
       });
     }
     cancelUiWaiters(_reason: string): void {}
     resolveWith(text: string): void {
       const w = this.waiters.shift();
+      if (w?.timer) clearTimeout(w.timer);
       w?.resolve(text);
     }
   }
@@ -158,6 +167,61 @@ describe("M9 WeixinUIContext dialogs", () => {
 
     broker.resolveWith("v2.3.4");
     await expect(promise).resolves.toBe("v2.3.4");
+  });
+
+  it("confirm/select/input ack the user with the received result", async () => {
+    const { transport, broker, ui } = setupUi();
+
+    // confirm -> approve
+    let promise = ui.confirm("部署", "放行？");
+    await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
+    broker.resolveWith("1");
+    await expect(promise).resolves.toBe(true);
+    expect(transport.sentTexts.at(-1)!.text).toContain("已确认");
+
+    // confirm -> cancel
+    promise = ui.confirm("部署", "放行？");
+    await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
+    broker.resolveWith("取消");
+    await expect(promise).resolves.toBe(false);
+    expect(transport.sentTexts.at(-1)!.text).toContain("已取消");
+
+    // select -> permission-style allow (e.g. "Yes")
+    promise = ui.select("Permission Required", ["Yes", "No"]);
+    await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
+    broker.resolveWith("1");
+    await expect(promise).resolves.toBe("Yes");
+    expect(transport.sentTexts.at(-1)!.text).toContain("已允许");
+
+    // select -> unrecognized reply warns and returns undefined
+    promise = ui.select("Permission Required", ["Yes", "No"]);
+    await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
+    broker.resolveWith("zzz");
+    await expect(promise).resolves.toBeUndefined();
+    expect(transport.sentTexts.at(-1)!.text).toContain("无法识别");
+
+    // input
+    promise = ui.input("版本", "v1");
+    await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
+    broker.resolveWith("v2.3.4");
+    await expect(promise).resolves.toBe("v2.3.4");
+    expect(transport.sentTexts.at(-1)!.text).toContain("已收到");
+  });
+
+  it("timeout auto-cancels/denies and notifies the user", async () => {
+    const { transport, broker, ui } = setupUi();
+
+    // confirm: user never replies -> auto-cancel (false) + notify
+    const promiseConfirm = ui.confirm("部署", "放行？", { timeout: 40 });
+    await expect(promiseConfirm).resolves.toBe(false);
+    expect(transport.sentTexts.at(-1)!.text).toContain("自动取消");
+    expect(broker.endCount).toBe(1);
+
+    // select (permission-style): user never replies -> auto-deny (undefined) + notify
+    const promiseSelect = ui.select("Permission Required", ["Yes", "No"], { timeout: 40 });
+    await expect(promiseSelect).resolves.toBeUndefined();
+    expect(transport.sentTexts.at(-1)!.text).toContain("自动拒绝");
+    expect(broker.endCount).toBe(2);
   });
 
   it("notify sends a fire-and-forget message to the current turn", async () => {

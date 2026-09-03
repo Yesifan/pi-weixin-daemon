@@ -7,6 +7,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.5.0]
+
+### Fixed
+
+- **修复「权限/UI ask 死锁」**：`getupdates` 长轮询循环原本 `await onInbound(full)`，会一直等待
+  turn 处理完成；而 turn 在等权限/UI 答复时又需要收到下一条消息，形成死锁（session 永久 busy、
+  回复收不到）。改为在 `onInbound` 处 **fire-and-forget**，turn 进行中仍持续轮询，答复能及时收回。
+
+### Added
+
+- **UI / 权限 ask 答复回执**：`confirm`/`select`/`input` 收到用户答复后，回发一条确认消息告诉用户结果
+  （如 `✅ 已允许：Yes` / `✅ 已确认` / `✅ 已收到：…`）。
+- **超时自动拒绝（兜底）**：ask 发出后计时，用户未在时限内回复则**自动拒绝/取消**并回发
+  `⏱️ 超时未收到回复，已自动拒绝/取消`。默认 **5 分钟**，环境变量 `PI_WEIXIN_UI_TIMEOUT_MS`（毫秒）覆盖。
+  未识别回复时也回发 `⚠️ 无法识别…` 提示。
+
+### Changed
+
+- `WeixinUIContext` 的 `waitForResponse` 现在正确生效：之前 SDK 传入的 `ExtensionUIDialogOptions.timeout`
+  在微信路径里**被忽略**（未映射到 broker 的 `timeoutMs`），现已按 `{ timeoutMs, signal }` 生效。
+
+### Docs
+
+- `docs/routing.md` 新增「UI / 权限交互（ask）」一节：答复路由、不阻塞接收、答复回执、超时自动拒绝。
+
+---
+
 ## [0.4.0]
 
 ### Added

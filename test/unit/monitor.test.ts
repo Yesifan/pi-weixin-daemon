@@ -154,4 +154,61 @@ describe("monitorWeixinProvider", () => {
     },
     10_000,
   );
+
+  it(
+    "does not block the poll loop while a turn is in-flight (deadlock fix)",
+    async () => {
+      const control = new AbortController();
+      let releaseFirst!: () => void;
+      let inboundCalls = 0;
+      let pollCalls = 0;
+
+      // First inbound blocks forever (simulates a turn waiting on a permission/
+      // UI response). The loop must still keep polling so it can receive the
+      // user's reply to that pending ask; otherwise it deadlocks.
+      const onInbound = vi.fn(async () => {
+        inboundCalls += 1;
+        if (inboundCalls === 1) {
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+      });
+
+      const responses: GetUpdatesResp[] = [
+        { ret: 0, msgs: [makeMessage()], get_updates_buf: "buf-1" },
+        { ret: 0, msgs: [makeMessage({ message_id: 2 })], get_updates_buf: "buf-2" },
+      ];
+      const fakeGetUpdates: GetUpdatesFn = vi.fn(async (params) => {
+        pollCalls += 1;
+        const resp = responses.shift();
+        if (!resp) {
+          control.abort();
+          return { ret: 0, msgs: [], get_updates_buf: params.get_updates_buf };
+        }
+        return resp;
+      });
+
+      const promise = monitorWeixinProvider({
+        baseUrl: "https://example.com",
+        accountId: "acct-a",
+        abortSignal: control.signal,
+        retryDelayMs: 1,
+        backoffDelayMs: 1,
+        getUpdatesFn: fakeGetUpdates,
+        logger,
+        onInbound,
+      });
+
+      // While the first inbound is still awaiting, the loop must have advanced
+      // to a second poll AND ingested the second message.
+      await vi.waitFor(() => expect(pollCalls).toBeGreaterThanOrEqual(2));
+      expect(inboundCalls).toBeGreaterThanOrEqual(2);
+
+      releaseFirst();
+      await promise;
+      expect(onInbound).toHaveBeenCalledTimes(2);
+    },
+    10_000,
+  );
 });

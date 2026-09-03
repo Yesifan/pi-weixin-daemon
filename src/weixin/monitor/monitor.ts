@@ -107,7 +107,16 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
         log.info(
           `inbound message: from=${full.from_user_id} types=${full.item_list?.map((i) => i.type).join(",") ?? "none"}`,
         );
-        await onInbound(full);
+        // Do NOT await inbound handling here. The long-poll loop must keep
+        // polling so the daemon can receive the user's reply to a pending
+        // permission/UI ask. Awaited handling of a single in-flight turn would
+        // deadlock the receive loop (a turn waiting on a UI response could
+        // never see that response arrive). Fire-and-forget keeps the loop
+        // unblocked; the bridge serializes concurrent messages via its own
+        // IDLE/RUNNING/WAITING_FOR_UI state machine.
+        onInbound(full).catch((err: unknown) =>
+          log.error({ err }, "inbound handling failed"),
+        );
       }
     } catch (err) {
       if (abortSignal?.aborted) {
