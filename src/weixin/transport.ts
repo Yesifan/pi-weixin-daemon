@@ -11,6 +11,12 @@ import { normalizeInboundMessage } from "./normalize.js";
 import { sendTextMessage } from "./messaging/send.js";
 import { restoreContextTokens, setContextToken } from "./storage/context-token.js";
 
+/** Inbound gate reply when the account is not bound to any project. */
+const GATE_UNBOUND_REPLY = "⚠️ 该账号尚未绑定任何项目，请先绑定 project 后再使用。";
+
+/** Inbound gate reply when the account's bound project is disabled. */
+const GATE_DISABLED_REPLY = "⚠️ 该项目已停用，启用后再发送消息。";
+
 export interface WeixinTransportOptions {
   accountId: string;
   /** API base URL; defaults to the account's stored baseUrl or the official endpoint. */
@@ -24,11 +30,14 @@ export interface WeixinTransportOptions {
   inboxDir?: string;
   /**
    * Resolve the effective inbox directory for this account at message time.
-   * Explicitly overrides `inboxDir`. When it returns undefined, the account has
-   * no bound/active project: the whole message is dropped (no media download, no
-   * emit) — the "gate before download" rule.
+   * Explicitly overrides `inboxDir`. When `dir` is undefined, the account has no
+   * bound/active project: the whole message is dropped (no media download, no
+   * emit) and a gate reply is sent (knowing `reason` picks the right message) —
+   * the "gate before download" rule.
    */
-  resolveInboxDir?: (accountId: string) => string | undefined;
+  resolveInboxDir?: (
+    accountId: string,
+  ) => { dir?: string; reason?: "unbound" | "disabled" } | undefined;
   logger: Logger;
   cdnBaseUrl?: string;
 }
@@ -169,27 +178,46 @@ export class ILinkWeixinTransport implements WeixinTransport {
   private async handleInbound(raw: WeixinMessage): Promise<void> {
     // Multi-project gate before media download: when a project inbox resolver is
     // configured and yields no dir, the account is unbound / project disabled —
-    // drop the message entirely (never download, never emit into Pi).
+    // drop the message entirely (never download, never emit into Pi) and tell
+    // the user why.
     const resolved = this.opts.resolveInboxDir?.(this.opts.accountId);
-    if (this.opts.resolveInboxDir && !resolved) {
-      this.opts.logger.debug({ accountId: this.opts.accountId }, "dropping inbound: no bound project inbox");
+    if (this.opts.resolveInboxDir && !resolved?.dir) {
+      await this.replyGate(raw, resolved?.reason);
       return;
     }
-    const inboxDir = resolved ?? this.opts.inboxDir;
+    const inboxDir = resolved?.dir ?? this.opts.inboxDir;
 
     // Media is downloaded to <inboxDir>/<messageKey>/ before normalization.
-    // Download failures never block message processing (attachment skipped).
-    const attachments = await downloadAttachmentsFromMessage(raw, {
+    // Download failures never block message processing; the failure is recorded
+    // so the agent can surface it to the user.
+    const { attachments, failures } = await downloadAttachmentsFromMessage(raw, {
       inboxDir,
       cdnBaseUrl: this.opts.cdnBaseUrl,
       logger: this.opts.logger,
     });
-    const msg = normalizeInboundMessage(this.opts.accountId, raw, attachments);
+    const msg = normalizeInboundMessage(this.opts.accountId, raw, attachments, failures);
     if (msg.senderId && msg.contextToken) {
       setContextToken(this.opts.accountId, msg.senderId, msg.contextToken);
     }
     for (const handler of [...this.handlers]) {
       await handler(msg);
+    }
+  }
+
+  /** Send a gate (unbound / disabled) reply back to the sender. */
+  private async replyGate(raw: WeixinMessage, reason?: "unbound" | "disabled"): Promise<void> {
+    if (!raw.from_user_id) return;
+    const ctx: TurnContext = {
+      accountId: this.opts.accountId,
+      senderId: raw.from_user_id,
+      messageId: "gate",
+      contextToken: raw.context_token,
+    };
+    const text = reason === "disabled" ? GATE_DISABLED_REPLY : GATE_UNBOUND_REPLY;
+    try {
+      await this.sendText(ctx, text);
+    } catch (err) {
+      this.opts.logger.warn({ err, accountId: this.opts.accountId }, "gate reply failed (ignored)");
     }
   }
 }

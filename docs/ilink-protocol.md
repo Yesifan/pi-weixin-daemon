@@ -201,13 +201,20 @@ if (!route.agentId) {
 ## 7. 面向 multi-project 的关键契约（本轮推断，待实现时验证）
 
 1. **「先门后下」**：在 account transport 层先做 `accountProjectIndex.get(accountId)`
-   一次 `Map` 查询（O(1)）——未绑定 / Project disabled → 直接 drop，**不下载媒体、
-   不鉴权**；已绑定 → 才下载到该 Project 的 inbox（`<cwd>/.pi-weixin/inbox`）。
+   一次 `Map` 查询（O(1)）——未绑定 / Project disabled → **不下载媒体、不鉴权**，并**回发告知
+   用户**（区分「未绑定 / 项目停用」两种文案）；已绑定 → 才下载到该 Project 的 inbox
+   （`<cwd>/.pi-weixin/inbox`）。
    - 这样**「未绑定账号的媒体」根本不会出现**。
    - 比官方更省：官方是 `saveMediaBuffer` 先下、后查 route，可能白下一份。
+   - **已绑定但 runtime 未运行**：绑定 + 启用 ⇒ 有 inbox，所以下载发生在 transport gate 之后；
+     真正判 `!rt` 丢弃在 `ProjectManager.dispatch`，此处**回发**「项目当前未运行」。
 2. **inboxDir 不应写死进 transport**：按账号当前绑定动态解析，rebind 时无需重建长轮询
    （不丢 `get_updates_buf`）。
 3. **busy / abort 是 Project 作用域**，不跨 Project 阻塞（见主方案 §8/§9）。
+4. **媒体处理（参考 Hermes，不混合）**：每条 iLink 消息独立成回合；image → 多模态
+   （base64+mime）；file / video / voice → **context note**（类型+保存路径+“自己读/处理”）给 agent；
+   voice 优先用 `voice_item.text`（iLink 自带语音转写）当文本，无转写才作为语音附件；
+   下载/解密失败 → 记录为 `mediaFailures`，由 agent 告知用户，不阻塞消息。
 
 ---
 

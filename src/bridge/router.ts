@@ -6,7 +6,7 @@ import { CommandRouter } from "./commands.js";
 import { ResponseAccumulator } from "./response.js";
 import { BUSY_REPLY, type BridgeState } from "./state.js";
 import { CurrentTurn, toTurnContext } from "./turn-context.js";
-import type { InboundMessage, TurnContext, UiResponseBroker, WeixinTransport } from "./types.js";
+import type { InboundAttachment, InboundMessage, TurnContext, UiResponseBroker, WeixinTransport } from "./types.js";
 
 interface UiWaiter {
   accountId: string;
@@ -247,17 +247,38 @@ function describeRunError(err: unknown): string {
 }
 
 /**
- * Build the prompt text: message text + local paths of non-image attachments
- * (files/videos/voice are referenced by path; images go as true multimodal input),
- * and an optional "-- from weixin <name>" sender marker.
+ * Build a Hermes-style context note for a non-image attachment (file/video/voice).
+ * Tells the agent what the attachment is, where it is, and to read/process it
+ * itself rather than punting back to the user.
+ */
+function contextNote(a: InboundAttachment): string {
+  const path = a.localPath;
+  const name = a.filename ?? "附件";
+  switch (a.kind) {
+    case "file":
+      return `[用户发送了一个文件: '${name}'。已保存于: ${path}。内容未内联（可能是 PDF/DOCX 等二进制）。若用户的请求涉及该文件内容，请自己用终端或文档工具提取文本后再回答，而不是让用户粘贴内容。]`;
+    case "video":
+      return `[用户发送了一个视频: '${name}'。已保存于: ${path}。若用户的请求涉及视频内容，请自己用视频分析/媒体工具检查后再回答，而不是让用户描述。]`;
+    case "voice":
+      return `[用户发送了一条语音消息，已保存于: ${path}。]`;
+    default:
+      return `[用户发送了一个附件: '${name}'。已保存于: ${path}。]`;
+  }
+}
+
+/**
+ * Build the prompt text: message text + context notes for non-image attachments
+ * (files/videos/voice; images go as true multimodal input) + any failed media
+ * note, and an optional "-- from weixin <name>" sender marker.
  */
 function buildPromptText(msg: InboundMessage, senderLabel?: string): string {
   const parts: string[] = [msg.text ?? ""];
   for (const a of msg.attachments) {
     if (a.kind === "image") continue; // passed as ImageContent
-    const label =
-      a.kind === "file" ? "文件" : a.kind === "video" ? "视频文件" : "语音文件";
-    parts.push(`\n[收到${label}: ${a.filename ?? a.localPath} → 本地路径 ${a.localPath}]`);
+    parts.push(contextNote(a));
+  }
+  for (const f of msg.mediaFailures ?? []) {
+    parts.push(`[附件下载失败，可能无法处理: ${f.filename ?? f.kind}]`);
   }
   if (senderLabel) {
     // Put the sender marker on its own line, preceded by a blank line.

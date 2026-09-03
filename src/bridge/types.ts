@@ -25,6 +25,12 @@ export interface InboundAttachment {
   mimeType?: string;
 }
 
+/** A media item that failed to download/decrypt (still surfaced so the agent can tell the user). */
+export interface MediaFailure {
+  kind: InboundAttachmentKind;
+  filename?: string;
+}
+
 /** A normalized inbound weixin message (DM). */
 export interface InboundMessage {
   accountId: string;
@@ -33,6 +39,8 @@ export interface InboundMessage {
   contextToken?: string;
   text?: string;
   attachments: InboundAttachment[];
+  /** Media items whose download/decrypt failed; injected as a prompt note. */
+  mediaFailures?: MediaFailure[];
   createdAt: number;
 }
 

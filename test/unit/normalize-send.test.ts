@@ -55,6 +55,16 @@ describe("extractText", () => {
     };
     expect(extractText(msg)).toBe("only");
   });
+
+  it("extracts voice STT text and treats it as message text", () => {
+    const msg: WeixinMessage = {
+      item_list: [
+        { type: 3, voice_item: { text: "转写内容" } },
+        { type: 1, text_item: { text: "文字" } },
+      ],
+    };
+    expect(extractText(msg)).toBe("转写内容\n文字");
+  });
 });
 
 describe("splitTextChunks", () => {

@@ -161,4 +161,42 @@ describe("ILinkWeixinTransport (mocked api)", () => {
 
     await t.stop();
   });
+
+  it("replies to the sender when the account is unbound (gate)", async () => {
+    const t = new ILinkWeixinTransport({
+      accountId: "acct-a",
+      token: "tok",
+      baseUrl: "https://example.com",
+      resolveInboxDir: () => ({ dir: undefined, reason: "unbound" }),
+      logger,
+    });
+    await t.start();
+
+    await capturedOnInbound.current!(makeRawMessage());
+
+    expect(apiMocks.sendMessage).toHaveBeenCalledTimes(1);
+    const body = apiMocks.sendMessage.mock.calls[0]?.[0];
+    expect(body.body.msg.to_user_id).toBe("user-1");
+    expect(String(body.body.msg.item_list[0].text_item.text)).toContain("尚未绑定任何项目");
+
+    await t.stop();
+  });
+
+  it("replies with a disabled message when the bound project is disabled (gate)", async () => {
+    const t = new ILinkWeixinTransport({
+      accountId: "acct-a",
+      token: "tok",
+      baseUrl: "https://example.com",
+      resolveInboxDir: () => ({ dir: undefined, reason: "disabled" }),
+      logger,
+    });
+    await t.start();
+
+    await capturedOnInbound.current!(makeRawMessage());
+
+    const body = apiMocks.sendMessage.mock.calls[0]?.[0];
+    expect(String(body.body.msg.item_list[0].text_item.text)).toContain("项目已停用");
+
+    await t.stop();
+  });
 });

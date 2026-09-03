@@ -58,8 +58,9 @@
 | `senderId` | 发消息的**真人**（= owner） |
 | `messageId` | 消息 id（`message_id` 或 `client_id`） |
 | `contextToken` | 微信下发的会话上下文 token，回复必须回传 |
-| `text` | 文本内容 |
-| `attachments` | 附件（image / file / video / voice） |
+| `text` | 文本内容（含语音转写 `voice_item.text`；语音转写后视为文本） |
+| `attachments` | 附件（image / file / video / voice）；image 走多模态，file/video/voice 以 context note 带入 |
+| `mediaFailures` | 下载/解密**失败**的媒体（不会阻塞，仅用于让 agent 告知用户） |
 | `createdAt` | `create_time_ms` |
 
 ### 1.6 回合上下文（TurnContext）

@@ -74,7 +74,7 @@ describe("downloadAttachmentsFromMessage", () => {
       ],
     };
 
-    const attachments = await downloadAttachmentsFromMessage(raw as never, { inboxDir, logger });
+    const { attachments } = await downloadAttachmentsFromMessage(raw as never, { inboxDir, logger });
     expect(attachments).toHaveLength(1);
     const img = attachments[0]!;
     expect(img.kind).toBe("image");
@@ -110,7 +110,7 @@ describe("downloadAttachmentsFromMessage", () => {
       ],
     };
 
-    const attachments = await downloadAttachmentsFromMessage(raw as never, { inboxDir, logger });
+    const { attachments } = await downloadAttachmentsFromMessage(raw as never, { inboxDir, logger });
     expect(attachments).toHaveLength(1);
     const file = attachments[0]!;
     expect(file.kind).toBe("file");
@@ -120,7 +120,7 @@ describe("downloadAttachmentsFromMessage", () => {
     expect(path.basename(file.localPath)).toBe("report.pdf");
   });
 
-  it("skips unsupported/failing items without blocking", async () => {
+  it("records failing items as failures but still completes (no exception)", async () => {
     const inboxDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "inbox-skip-"));
     vi.stubGlobal("fetch", vi.fn(async () => {
       return new Response("oops", { status: 500 });
@@ -133,7 +133,10 @@ describe("downloadAttachmentsFromMessage", () => {
         { type: 1, text_item: { text: "hi" } },
       ],
     };
-    const attachments = await downloadAttachmentsFromMessage(raw as never, { inboxDir, logger });
+    const { attachments, failures } = await downloadAttachmentsFromMessage(raw as never, { inboxDir, logger });
     expect(attachments).toHaveLength(0);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.kind).toBe("file");
+    expect(failures[0]?.filename).toBe("x.pdf");
   });
 });

@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { Logger } from "../../util/logger.js";
 import { sanitizeDirName, sanitizeFilename } from "../../util/sanitize.js";
-import type { InboundAttachment, InboundAttachmentKind } from "../../bridge/types.js";
+import type { InboundAttachment, InboundAttachmentKind, MediaFailure } from "../../bridge/types.js";
 import type { MessageItem, WeixinMessage } from "../api/types.js";
 import { MessageItemType } from "../api/types.js";
 import { CDN_BASE_URL } from "../auth/accounts.js";
@@ -60,22 +60,28 @@ function attachment(kind: InboundAttachmentKind, localPath: string, filename?: s
   return { kind, localPath, filename, mimeType };
 }
 
+/** A single media item's outcome: either a usable attachment, or a recorded failure. */
+interface MediaDownloadResult {
+  attachment?: InboundAttachment;
+  failure?: MediaFailure;
+}
+
 /**
  * Download and decrypt media from a single MessageItem into the inbox.
- * Returns an attachment, or undefined on unsupported type/failure (media
- * failures never block message processing).
+ * Returns a result carrying either a usable attachment or a recorded failure.
+ * Unsupported types return `{}` (neither) — they never block message processing.
  */
 export async function downloadMediaFromItem(
   item: MessageItem,
   deps: { inboxDir: string; messageKey: string; cdnBaseUrl?: string; logger: Logger },
-): Promise<InboundAttachment | undefined> {
+): Promise<MediaDownloadResult> {
   const { inboxDir, messageKey, logger } = deps;
   const cdnBaseUrl = deps.cdnBaseUrl ?? CDN_BASE_URL;
   const label = "inbound";
 
   if (item.type === MessageItemType.IMAGE) {
     const img = item.image_item;
-    if (!img?.media?.encrypt_query_param && !img?.media?.full_url) return undefined;
+    if (!img?.media?.encrypt_query_param && !img?.media?.full_url) return {};
     const aesKeyBase64 = img.aeskey
       ? Buffer.from(img.aeskey, "hex").toString("base64")
       : img.media.aes_key;
@@ -103,18 +109,19 @@ export async function downloadMediaFromItem(
         buf,
         logger,
       });
-      return attachment("image", filePath, `image${ext}`, mime);
+      return { attachment: attachment("image", filePath, `image${ext}`, mime) };
     } catch (err) {
       logger.error(`${label} image download/decrypt failed: ${String(err)}`);
-      return undefined;
+      return { failure: { kind: "image", filename: "image" } };
     }
   }
 
   if (item.type === MessageItemType.FILE) {
     const fileItem = item.file_item;
     if ((!fileItem?.media?.encrypt_query_param && !fileItem?.media?.full_url) || !fileItem?.media?.aes_key) {
-      return undefined;
+      return {};
     }
+    const filename = fileItem.file_name ?? "file.bin";
     try {
       const buf = await downloadAndDecryptBuffer(
         fileItem.media.encrypt_query_param ?? "",
@@ -123,20 +130,19 @@ export async function downloadMediaFromItem(
         `${label} file`,
         fileItem.media.full_url,
       );
-      const filename = fileItem.file_name ?? "file.bin";
       const mime = getMimeFromFilename(filename);
       const filePath = await saveInboundMedia({ inboxDir, messageKey, filename, buf, logger });
-      return attachment("file", filePath, filename, mime);
+      return { attachment: attachment("file", filePath, filename, mime) };
     } catch (err) {
       logger.error(`${label} file download failed: ${String(err)}`);
-      return undefined;
+      return { failure: { kind: "file", filename } };
     }
   }
 
   if (item.type === MessageItemType.VIDEO) {
     const videoItem = item.video_item;
     if ((!videoItem?.media?.encrypt_query_param && !videoItem?.media?.full_url) || !videoItem?.media?.aes_key) {
-      return undefined;
+      return {};
     }
     try {
       const buf = await downloadAndDecryptBuffer(
@@ -153,17 +159,17 @@ export async function downloadMediaFromItem(
         buf,
         logger,
       });
-      return attachment("video", filePath, "video.mp4", "video/mp4");
+      return { attachment: attachment("video", filePath, "video.mp4", "video/mp4") };
     } catch (err) {
       logger.error(`${label} video download failed: ${String(err)}`);
-      return undefined;
+      return { failure: { kind: "video", filename: "video.mp4" } };
     }
   }
 
   if (item.type === MessageItemType.VOICE) {
     const voice = item.voice_item;
     if ((!voice?.media?.encrypt_query_param && !voice?.media?.full_url) || !voice?.media?.aes_key) {
-      return undefined;
+      return {};
     }
     try {
       const buf = await downloadAndDecryptBuffer(
@@ -181,28 +187,30 @@ export async function downloadMediaFromItem(
         buf,
         logger,
       });
-      return attachment("voice", filePath, "voice.silk", "audio/silk");
+      return { attachment: attachment("voice", filePath, "voice.silk", "audio/silk") };
     } catch (err) {
       logger.error(`${label} voice download failed: ${String(err)}`);
-      return undefined;
+      return { failure: { kind: "voice", filename: "voice.silk" } };
     }
   }
 
-  return undefined;
+  return {};
 }
 
 /** Download all media items of a raw message into the inbox. */
 export async function downloadAttachmentsFromMessage(
   raw: WeixinMessage,
   deps: { inboxDir?: string; cdnBaseUrl?: string; logger: Logger },
-): Promise<InboundAttachment[]> {
+): Promise<{ attachments: InboundAttachment[]; failures: MediaFailure[] }> {
   // No inbox => no place to persist inbound media; drop attachments (text still flows).
-  if (!deps.inboxDir) return [];
+  if (!deps.inboxDir) return { attachments: [], failures: [] };
   const messageKey = String(raw.message_id ?? raw.client_id ?? Date.now());
   const attachments: InboundAttachment[] = [];
+  const failures: MediaFailure[] = [];
   for (const item of raw.item_list ?? []) {
     const result = await downloadMediaFromItem(item, { ...deps, messageKey, inboxDir: deps.inboxDir });
-    if (result) attachments.push(result);
+    if (result.attachment) attachments.push(result.attachment);
+    else if (result.failure) failures.push(result.failure);
   }
-  return attachments;
+  return { attachments, failures };
 }

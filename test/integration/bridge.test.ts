@@ -205,6 +205,53 @@ describe("M8 media routing through the bridge", () => {
     runtime.complete("已分析");
     await turnPromise;
   });
+
+  it("file attachments become a Hermes-style context note (read it yourself, don't ask user)", async () => {
+    const { runtime, transportA } = setup();
+    const filePath = path.join(process.cwd(), "test/.tmp", "m8-ctx", "42", "data.csv");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "a,b\n1,2\n");
+
+    const turnPromise = transportA.emit(
+      makeInboundMessage({
+        accountId: "acct-a",
+        senderId: "user-a",
+        messageId: "m-ctx",
+        text: "分析这个文件",
+        attachments: [{ kind: "file", localPath: filePath, filename: "data.csv", mimeType: "text/csv" }],
+      }),
+    );
+    await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
+
+    const promptText = runtime.prompts[0]?.text ?? "";
+    expect(promptText).toContain("用户发送了一个文件");
+    expect(promptText).toContain("自己用终端或文档工具提取文本");
+
+    runtime.complete("已分析");
+    await turnPromise;
+  });
+
+  it("media download failures are injected into the prompt as a note", async () => {
+    const { runtime, transportA } = setup();
+    const turnPromise = transportA.emit(
+      makeInboundMessage({
+        accountId: "acct-a",
+        senderId: "user-a",
+        messageId: "m-fail",
+        text: "看这个",
+        attachments: [],
+        mediaFailures: [{ kind: "file", filename: "broken.pdf" }],
+      }),
+    );
+    await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
+
+    const promptText = runtime.prompts[0]?.text ?? "";
+    expect(promptText).toContain("附件下载失败");
+    expect(promptText).toContain("broken.pdf");
+
+    runtime.complete("嗯");
+    await turnPromise;
+  });
 });
 
 describe("M9 sender marker + broadcast hook", () => {

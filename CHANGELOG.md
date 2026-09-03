@@ -7,6 +7,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.5.1]
+
+### Added
+
+- **入站媒体处理（参考 Hermes，不混合）**：每条 iLink 消息独立成回合；**图片**→多模态
+  （base64 + mime）；**文件 / 视频 / 语音文件**→生成 **context note**（类型 + 保存路径 +
+  “自己读/处理，别让用户粘贴/描述”）交给 agent；**语音**优先用 `voice_item.text`（iLink 自带的
+  语音转写）**当作文本**，无转写才作为语音附件。
+- **下载失败告知**：媒体下载/解密失败不再静默跳过，而是记录为 `mediaFailures`，交由 agent
+  告知用户“附件下载失败”。
+- **丢弃前告知（gate）**：账号**未绑定** / **项目停用** / **已绑定但项目未运行**时，回发告知
+  用户（不再静默丢弃）；`transport` 层区分「未绑定/停用」文案，`ProjectManager.dispatch` 处理
+  「未运行」告知。
+
+### Changed
+
+- `resolveInboxDir` 现在返回 `{ dir, reason }` 以区分「未绑定/停用」；
+  `downloadAttachmentsFromMessage` 返回 `{ attachments, failures }`；`InboundMessage` 新增
+  `mediaFailures` 字段；`extractText` 提取语音转写 `voice_item.text`。
+
+---
+
 ## [0.5.0]
 
 ### Fixed

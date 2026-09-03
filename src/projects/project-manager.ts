@@ -95,6 +95,18 @@ export class ProjectManager {
     const rt = this.runtimes.get(projectId);
     if (!rt) {
       this.opts.logger.info({ account: accountId, project: projectId }, "dropping inbound: project not running");
+      // Tell the sender instead of silently dropping (bound+enabled but runtime not up).
+      const transport = this.opts.getTransport(accountId);
+      if (transport && msg.senderId) {
+        await transport
+          .sendText(
+            { accountId, senderId: msg.senderId, messageId: "not-running", contextToken: msg.contextToken },
+            "⚠️ 项目当前未运行（可能启动失败或仍在启动），请稍后重试。",
+          )
+          .catch((err: unknown) =>
+            this.opts.logger.warn({ err, account: accountId }, "project-not-running reply failed (ignored)"),
+          );
+      }
       return;
     }
     await rt.handleMessage(msg);

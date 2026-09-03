@@ -313,13 +313,13 @@ export class Daemon {
     return Object.entries(this.config.projects).map(([name, config]) => ({ name, config }));
   }
 
-  /** Gate + inbox resolution for an account: its project's inbox, or undefined. */
-  private resolveInboxDir(accountId: string): string | undefined {
+  /** Gate + inbox resolution for an account: its project's inbox (and gate reason). */
+  private resolveInboxDir(accountId: string): { dir?: string; reason?: "unbound" | "disabled" } {
     const projectId = this.projectManager.getProjectIdForAccount(accountId);
-    if (!projectId) return undefined;
+    if (!projectId) return { dir: undefined, reason: "unbound" };
     const cfg = this.config.projects[projectId];
-    if (!cfg || !cfg.enabled) return undefined;
-    return path.join(cfg.cwd, ".pi-weixin", "inbox");
+    if (!cfg || !cfg.enabled) return { dir: undefined, reason: "disabled" };
+    return { dir: path.join(cfg.cwd, ".pi-weixin", "inbox") };
   }
 
   /** Single project status (for RPC project.get). */

@@ -1,14 +1,18 @@
-import type { InboundAttachment, InboundMessage } from "../bridge/types.js";
+import type { InboundAttachment, InboundMessage, MediaFailure } from "../bridge/types.js";
 import type { MessageItem, WeixinMessage } from "./api/types.js";
 import { MessageItemType, MessageType } from "./api/types.js";
 import { generateId } from "./util/random.js";
 
-/** Collect the concatenated text from a message's item_list. */
+/** Collect the concatenated text from a message's item_list (text + voice STT). */
 export function extractText(message: WeixinMessage): string | undefined {
   const parts: string[] = [];
   for (const item of message.item_list ?? []) {
     if (item.type === MessageItemType.TEXT && item.text_item?.text) {
       parts.push(item.text_item.text);
+    } else if (item.type === MessageItemType.VOICE && item.voice_item?.text) {
+      // Weixin's own STT output (voice_item.text); non-Chinese may be poor, but
+      // it's the zero-cost default — voice is treated as text when available.
+      parts.push(item.voice_item.text);
     }
   }
   return parts.length > 0 ? parts.join("\n") : undefined;
@@ -25,6 +29,7 @@ export function normalizeInboundMessage(
   accountId: string,
   raw: WeixinMessage,
   attachments: InboundAttachment[] = [],
+  mediaFailures: MediaFailure[] = [],
 ): InboundMessage {
   const messageId =
     raw.message_id !== undefined && raw.message_id !== 0
@@ -42,6 +47,7 @@ export function normalizeInboundMessage(
     contextToken: raw.context_token,
     text: extractText(raw),
     attachments: isUserMessage ? attachments : [],
+    mediaFailures: isUserMessage ? mediaFailures : [],
     createdAt: raw.create_time_ms ?? Date.now(),
   };
 }
