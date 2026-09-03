@@ -80,6 +80,9 @@ export class ProjectRuntime {
   private lastActivityAt = Date.now();
   private sessionExpired = false;
   private idleTimer: NodeJS.Timeout | undefined;
+  /** Set once start() settles (extensions bound / session_start dispatched). */
+  private resolveStarted!: () => void;
+  private readonly started: Promise<void> = new Promise((r) => (this.resolveStarted = r));
 
   constructor(private readonly opts: ProjectRuntimeOptions) {
     this.projectId = opts.projectId;
@@ -116,6 +119,11 @@ export class ProjectRuntime {
       this.error = err instanceof Error ? err.message : String(err);
       this.opts.logger.error({ err, project: this.projectId }, "project runtime start failed");
       throw err;
+    } finally {
+      // Release any message that arrived while start() was still binding
+      // extensions / dispatching session_start (pi-web waits for extensions
+      // bound before serving a prompt; see waitUntilReady in rpc-manager).
+      this.resolveStarted();
     }
   }
 
@@ -125,6 +133,12 @@ export class ProjectRuntime {
     this.registerParticipant(msg);
     this.lastActivityAt = Date.now();
     this.scheduleIdleCheck();
+
+    // ① Wait until the runtime finished starting (extensions bound, session_start
+    //    dispatched) so the first tool call is gated against the fully-configured
+    //    project scope, not an init/global-only state (mirrors pi-web's
+    //    waitUntilReady before serving a prompt).
+    await this.started;
 
     // ① A session was auto-closed while idle: start a fresh one on next message.
     if (this.sessionExpired) {
