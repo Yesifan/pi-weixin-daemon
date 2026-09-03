@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.5.2]
+
+### Fixed
+
+- **修复 wx 会话未应用项目级权限配置**：pi-wx 嵌入式会话（`PiRuntime`）在创建时未接入
+  项目信任解析（对齐 pi-web / `pi` CLI 的 `resourceLoaderReloadOptions.resolveProjectTrust`），
+  导致 `@gotgenes/pi-permission-system` 等扩展读不到项目作用域配置，只落全局限定（如
+  `external_directory: "*": ask`）。现在 `createAgentSessionServices` 显式传入
+  `settingsManager` 与 `projectTrustReloadOptions`，按 `~/.pi/agent/trust.json` 解析项目信任，
+  项目级 allow（如 `~/Beancount`）重新生效、不再误弹权限窗。
+
+---
+
 ## [0.5.1]
 
 ### Added

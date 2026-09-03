@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { getAgentDir, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { PiRuntime } from "../../src/agent/runtime.js";
 import { createLogger } from "../../src/util/logger.js";
 import { createTmpProject, waitForMarker, type TmpProject } from "../helpers/tmp-project.js";
@@ -44,6 +45,44 @@ describe("M2: Pi SDK runtime integration (real SDK + real model)", () => {
 
       // Second prompt in the same session must still work (same bound session).
       await promptAndExpectMarker(runtime, "again456", project.markerFile);
+    },
+    TIMEOUT + 30_000,
+  );
+
+  it(
+    "resolves project trust from the shared trust store (project scope honored)",
+    async () => {
+      project = createTmpProject("m2-trusted");
+      const runtime = new PiRuntime({ cwd: project.dir, logger });
+      runtimes.push(runtime);
+
+      // The tmp project sits under the tested repo root, which is trusted.
+      await runtime.start();
+      expect(runtime.session?.settingsManager.isProjectTrusted()).toBe(true);
+      // With trust, the project .pi/extensions tool is available (proves
+      // project-scoped resources are loaded, not just the global defaults).
+      await promptAndExpectMarker(runtime, "trusted789", project.markerFile);
+    },
+    TIMEOUT + 30_000,
+  );
+
+  it(
+    "withholds project-scoped resources when the project is explicitly untrusted",
+    async () => {
+      project = createTmpProject("m2-untrusted");
+      // Force an explicit untrusted decision for this exact path (overrides
+      // the trusted inheritance from the repo root).
+      new ProjectTrustStore(getAgentDir()).set(project.dir, false);
+      const runtime = new PiRuntime({ cwd: project.dir, logger });
+      runtimes.push(runtime);
+
+      try {
+        await runtime.start();
+        expect(runtime.session?.settingsManager.isProjectTrusted()).toBe(false);
+      } finally {
+        // Restore the inherited trust state so later runs behave the same.
+        new ProjectTrustStore(getAgentDir()).set(project.dir, null);
+      }
     },
     TIMEOUT + 30_000,
   );

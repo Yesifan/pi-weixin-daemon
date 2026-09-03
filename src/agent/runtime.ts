@@ -11,7 +11,10 @@ import {
   createAgentSessionRuntime,
   createAgentSessionServices,
   getAgentDir,
+  hasTrustRequiringProjectResources,
+  ProjectTrustStore,
   SessionManager,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Logger } from "../util/logger.js";
 
@@ -85,17 +88,35 @@ export class PiRuntime implements AgentRuntime {
   /** Create a fresh session for `cwd` and bind session-local subscriptions. */
   async start(): Promise<void> {
     const { cwd, logger } = this.opts;
+    const agentDir = getAgentDir();
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({
       cwd: factoryCwd,
       sessionManager,
       sessionStartEvent,
     }) => {
+      // Mirror pi-web / the pi CLI: gate trust-requiring project resources
+      // behind the SDK's project-trust store (read from ~/.pi/agent/trust.json).
+      // Without this the embedded session never resolves project trust and
+      // project-scoped extension config (e.g. a project's permission rules) is
+      // skipped, falling back to global policy only.
+      const trustReloadOptions = hasTrustRequiringProjectResources(factoryCwd)
+        ? {
+            resolveProjectTrust: async () =>
+              new ProjectTrustStore(agentDir).get(factoryCwd) === true,
+          }
+        : undefined;
+
       const services = await createAgentSessionServices({
         cwd: factoryCwd,
+        agentDir,
+        settingsManager: SettingsManager.create(factoryCwd, agentDir),
         resourceLoaderOptions: this.opts.extensionFactories?.length
           ? { extensionFactories: this.opts.extensionFactories }
           : undefined,
+        ...(trustReloadOptions
+          ? { resourceLoaderReloadOptions: trustReloadOptions }
+          : {}),
       });
       return {
         ...(await createAgentSessionFromServices({
@@ -110,7 +131,7 @@ export class PiRuntime implements AgentRuntime {
 
     const runtime = await createAgentSessionRuntime(createRuntime, {
       cwd,
-      agentDir: getAgentDir(),
+      agentDir,
       // Always start a fresh session: no cross-restart resume. Each daemon start
       // (and each project runtime start) gets a new, empty session.
       sessionManager: SessionManager.create(cwd),
