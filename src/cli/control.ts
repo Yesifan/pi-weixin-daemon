@@ -1,7 +1,18 @@
 import { execFile } from "node:child_process";
 import { Command } from "commander";
+import { VERSION } from "../version.js";
 
 const SERVICE_NAME = "pi-weixin-daemon";
+
+/** Resolve the bundled pi-coding-agent SDK version (best-effort). */
+async function piSdkVersion(): Promise<string> {
+  try {
+    const sdk = await import("@earendil-works/pi-coding-agent");
+    return sdk.VERSION ?? "?";
+  } catch {
+    return "?";
+  }
+}
 
 /** Run a systemctl/journalctl command and stream stdout to the console. */
 function run(cmd: string, args: string[], opts: { passthrough?: boolean } = {}): void {
@@ -37,11 +48,15 @@ export function restartCommand(): Command {
     .action(() => run("systemctl", ["--user", "restart", SERVICE_NAME], { passthrough: true }));
 }
 
-/** `pi-weixin-daemon status` — systemctl --user --no-pager status pi-weixin-daemon */
+/** `pi-wx status` — print versions, then systemctl --user --no-pager status pi-weixin-daemon */
 export function statusCommand(): Command {
   return new Command("status")
-    .description("Show systemd --user status")
-    .action(() => run("systemctl", ["--user", "--no-pager", "status", SERVICE_NAME], { passthrough: true }));
+    .description("Show versions and systemd --user status")
+    .action(async () => {
+      const piSdk = await piSdkVersion();
+      console.log(`pi ${piSdk} · pi-wx ${VERSION}\n`);
+      run("systemctl", ["--user", "--no-pager", "status", SERVICE_NAME], { passthrough: true });
+    });
 }
 
 /** `pi-weixin-daemon logs` — journalctl --user -u pi-weixin-daemon */

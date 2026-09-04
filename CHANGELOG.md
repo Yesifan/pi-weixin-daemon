@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.5.4]
+
+### Added
+
+- **`pi-wx status` 显示版本信息**：输出首行 `pi-wx <版本> · pi (@earendil-works/pi-coding-agent) <版本>`，
+  再显示 systemd --user 状态。
+
 ## [0.5.3]
 
 ### Added
