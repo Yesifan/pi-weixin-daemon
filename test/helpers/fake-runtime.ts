@@ -23,6 +23,10 @@ export class FakeAgentRuntime implements AgentRuntime {
   async start(): Promise<void> {}
   async stop(): Promise<void> {}
 
+  hasSession(): boolean {
+    return true;
+  }
+
   async prompt(text: string, images?: ImageContent[]): Promise<void> {
     this.prompts.push({ text, images });
     await new Promise<void>((resolve, reject) => {
@@ -82,6 +86,7 @@ export class FakeAgentRuntime implements AgentRuntime {
       cwd: this.cwd,
       model: "fake/provider",
       thinkingLevel: "medium",
+      trust: true,
     };
   }
 }

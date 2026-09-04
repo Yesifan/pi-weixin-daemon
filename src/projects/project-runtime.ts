@@ -55,6 +55,7 @@ export interface RuntimeStatusView {
   sessionFile?: string;
   sessionId?: string;
   model?: string;
+  trust?: boolean;
   error?: string;
 }
 
@@ -112,7 +113,7 @@ export class ProjectRuntime {
       this.bridge.bindRuntime(this.runtime);
       this.state = "idle";
       this.lastActivityAt = Date.now();
-      this.scheduleIdleCheck();
+      // No session yet (lazy); idle auto-close is scheduled on first message.
       this.opts.logger.info({ project: this.projectId, cwd: this.cwd }, "project runtime started");
     } catch (err) {
       this.state = "error";
@@ -216,6 +217,7 @@ export class ProjectRuntime {
       sessionFile: s?.sessionFile,
       sessionId: s?.sessionId,
       model: s?.model,
+      trust: s?.trust,
       error: this.error,
     };
   }
@@ -283,8 +285,9 @@ export class ProjectRuntime {
     if (this.sessionExpired) return;
     const idleMs = this.opts.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS;
     const now = Date.now();
-    // Only expire while genuinely idle; busy turns (or fresh activity) reset the timer.
-    if (this.bridge?.getState() !== "IDLE" || now - this.lastActivityAt < idleMs) {
+    // Idle auto-close only applies once a session exists; before lazy creation
+    // there is nothing to close.
+    if (!this.runtime?.hasSession() || this.bridge?.getState() !== "IDLE" || now - this.lastActivityAt < idleMs) {
       this.scheduleIdleCheck();
       return;
     }

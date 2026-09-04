@@ -18,6 +18,19 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Logger } from "../util/logger.js";
 
+/**
+ * Whether this project's trust-requiring resources should load, mirroring pi's
+ * official resolution: nearest saved decision in `~/.pi/agent/trust.json`,
+ * otherwise fall back to `defaultProjectTrust` ("always" trusts; "ask"/"never"
+ * decline in non-interactive mode).
+ */
+function resolveProjectTrust(cwd: string, agentDir: string): boolean {
+  if (!hasTrustRequiringProjectResources(cwd)) return true;
+  const saved = new ProjectTrustStore(agentDir).get(cwd);
+  if (saved !== null) return saved;
+  return SettingsManager.create(cwd, agentDir).getDefaultProjectTrust() === "always";
+}
+
 export interface PiRuntimeOptions {
   /** Project working directory. The single entry point for the project. */
   cwd: string;
@@ -36,6 +49,8 @@ export interface SessionStatus {
   cwd: string;
   model: string;
   thinkingLevel: string;
+  /** Whether the project's trust-requiring resources are loaded. */
+  trust: boolean;
 }
 
 type RuntimeListener = (event: AgentSessionEvent) => void;
@@ -50,6 +65,7 @@ export interface AgentRuntime {
   newSession(): Promise<void>;
   compact(customInstructions?: string): Promise<void>;
   onEvent(listener: RuntimeListener): () => void;
+  hasSession(): boolean;
   getStatus(): SessionStatus;
 }
 
@@ -86,7 +102,9 @@ export class PiRuntime implements AgentRuntime {
   }
 
   /** Create a fresh session for `cwd` and bind session-local subscriptions. */
-  async start(): Promise<void> {
+  /** Lazily create the AgentSessionRuntime (and its session) on first use. */
+  private async ensureRuntime(): Promise<NonNullable<typeof this.runtime>> {
+    if (this.runtime) return this.runtime;
     const { cwd, logger } = this.opts;
     const agentDir = getAgentDir();
 
@@ -95,18 +113,6 @@ export class PiRuntime implements AgentRuntime {
       sessionManager,
       sessionStartEvent,
     }) => {
-      // Mirror pi-web / the pi CLI: gate trust-requiring project resources
-      // behind the SDK's project-trust store (read from ~/.pi/agent/trust.json).
-      // Without this the embedded session never resolves project trust and
-      // project-scoped extension config (e.g. a project's permission rules) is
-      // skipped, falling back to global policy only.
-      const trustReloadOptions = hasTrustRequiringProjectResources(factoryCwd)
-        ? {
-            resolveProjectTrust: async () =>
-              new ProjectTrustStore(agentDir).get(factoryCwd) === true,
-          }
-        : undefined;
-
       const services = await createAgentSessionServices({
         cwd: factoryCwd,
         agentDir,
@@ -114,8 +120,15 @@ export class PiRuntime implements AgentRuntime {
         resourceLoaderOptions: this.opts.extensionFactories?.length
           ? { extensionFactories: this.opts.extensionFactories }
           : undefined,
-        ...(trustReloadOptions
-          ? { resourceLoaderReloadOptions: trustReloadOptions }
+        // Gate trust-requiring project resources behind the SDK's project-trust
+        // decision (mirror pi-web / the pi CLI). Without this, project-scoped
+        // extension config is skipped and global policy is used.
+        ...(hasTrustRequiringProjectResources(factoryCwd)
+          ? {
+              resourceLoaderReloadOptions: {
+                resolveProjectTrust: async () => resolveProjectTrust(factoryCwd, agentDir),
+              },
+            }
           : {}),
       });
       return {
@@ -132,23 +145,29 @@ export class PiRuntime implements AgentRuntime {
     const runtime = await createAgentSessionRuntime(createRuntime, {
       cwd,
       agentDir,
-      // Always start a fresh session: no cross-restart resume. Each daemon start
-      // (and each project runtime start) gets a new, empty session.
+      // Always a fresh session: no cross-restart resume.
       sessionManager: SessionManager.create(cwd),
     });
-    this.runtime = runtime;
-
     // Official hook: called automatically after newSession/switchSession/fork
     // replace the active session. We rebind the UI context and subscriptions.
     runtime.setRebindSession(async (session) => {
       await this.bindSession(session);
     });
-
     await this.bindSession(runtime.session);
+    this.runtime = runtime;
+
     logger.info(
       { sessionFile: runtime.session.sessionFile, sessionId: runtime.session.sessionId },
       "pi runtime started",
     );
+    return runtime;
+  }
+
+  async start(): Promise<void> {
+    // Lazy start: the session is only created on the first prompt (a user
+    // message) or /new. Standing up N sessions at daemon start wastes resources
+    // for projects that never receive a message.
+    this.opts.logger.debug({ cwd: this.opts.cwd }, "pi runtime ready (session lazy)");
   }
 
   private async bindSession(session: AgentSession): Promise<void> {
@@ -174,44 +193,53 @@ export class PiRuntime implements AgentRuntime {
     };
   }
 
-  /** Prompt the agent. Throws on abort/error; callers handle busy semantics. */
+  /** Prompt the agent. Creates the session on first use (lazy). */
   async prompt(text: string, images?: ImageContent[]): Promise<void> {
-    const session = this.requireSession();
+    const { session } = await this.ensureRuntime();
     this.opts.logger.info({ sessionId: session.sessionId }, "prompt");
     await session.prompt(text, images?.length ? { images } : undefined);
   }
 
-  /** Abort the current agent run (official abort API). */
+  /** Abort the current agent run. No-op when no session is active. */
   async abort(): Promise<void> {
-    const session = this.requireSession();
+    const session = this.sessionRef;
+    if (!session) return;
     this.opts.logger.info("abort requested");
     await session.abort();
   }
 
-  /** Start a fresh session (replaces the active session; bindings rebind automatically). */
+  /** Reset the active session. /new only resets an existing session, never creates one. */
   async newSession(): Promise<void> {
-    const runtime = this.requireRuntime();
+    if (!this.runtime) {
+      this.opts.logger.info("new session ignored: no active session");
+      return;
+    }
     this.opts.logger.info("new session requested");
-    await runtime.newSession();
+    await this.runtime.newSession();
   }
 
-  /** Compact the current session. */
+  /** Compact the current session. No-op when no session exists. */
   async compact(customInstructions?: string): Promise<void> {
-    const session = this.requireSession();
+    const session = this.sessionRef;
+    if (!session) return;
     this.opts.logger.info("compact requested");
     await session.compact(customInstructions);
+  }
+
+  hasSession(): boolean {
+    return this.sessionRef !== undefined;
   }
 
   getStatus(): SessionStatus {
     const session = this.sessionRef;
     const model = session?.model;
-    const modelName = model ? `${model.provider}/${model.id}` : "unknown";
     return {
       sessionFile: session?.sessionFile,
       sessionId: session?.sessionId,
       cwd: this.opts.cwd,
-      model: modelName,
+      model: model ? `${model.provider}/${model.id}` : "unknown",
       thinkingLevel: String(session?.thinkingLevel ?? "unknown"),
+      trust: resolveProjectTrust(this.opts.cwd, getAgentDir()),
     };
   }
 
@@ -228,13 +256,5 @@ export class PiRuntime implements AgentRuntime {
     this.opts.logger.info("pi runtime stopped");
   }
 
-  private requireRuntime(): Awaited<ReturnType<typeof createAgentSessionRuntime>> {
-    if (!this.runtime) throw new Error("PiRuntime not started");
-    return this.runtime;
-  }
 
-  private requireSession(): AgentSession {
-    if (!this.sessionRef) throw new Error("PiRuntime session not bound");
-    return this.sessionRef;
-  }
 }

@@ -7,6 +7,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.5.3]
+
+### Added
+
+- **`/status` 显示项目 trust 状态**：`PiRuntime.getStatus()` 新增 `trust` 字段，
+  `/status` 输出 `Trusted: true/false`。trust 独立于 session 计算（仅读
+  `~/.pi/agent/trust.json` + `defaultProjectTrust`），懒建前也能正确上报。
+
+### Changed
+
+- **session 懒创建**：项目/daemon 启动阶段不再创建 session，首条用户消息或 `/new`
+  才经 `ensureRuntime()` 创建，避免为闲置项目空转建会话。
+
+### Fixed
+
+- **完善项目 trust 决策链**：`resolveProjectTrust` 不再硬编码 `trust.json === true`，
+  无 saved 决策时回退全局 `defaultProjectTrust`（`always` 信任；`ask`/`never` 非交互下拒绝），
+  对齐 pi 官方/CLI，修复「项目作用域配置不被 trust」。
+- **`/new` 不空转**：无活跃 session 时 `/new` 不再创建空会话，提示
+  「当前无会话，直接发送消息即可开始新会话。」
+- **闲置自动关闭仅在有 session 时触发**：懒建前（从未发消息）项目不再误广播「会话已关闭」。
+
+---
+
 ## [0.5.2]
 
 ### Fixed

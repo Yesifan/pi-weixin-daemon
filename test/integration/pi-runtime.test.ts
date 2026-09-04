@@ -36,12 +36,14 @@ describe("M2: Pi SDK runtime integration (real SDK + real model)", () => {
 
       await runtime.start();
 
+      // Lazy start: no session until the first prompt.
+      expect(runtime.getStatus().sessionId).toBeUndefined();
+
+      await promptAndExpectMarker(runtime, "hello123", project.markerFile);
       const status = runtime.getStatus();
       expect(status.sessionFile).toBeTruthy();
       expect(status.sessionId).toBeTruthy();
       expect(status.model).not.toBe("unknown");
-
-      await promptAndExpectMarker(runtime, "hello123", project.markerFile);
 
       // Second prompt in the same session must still work (same bound session).
       await promptAndExpectMarker(runtime, "again456", project.markerFile);
@@ -56,12 +58,15 @@ describe("M2: Pi SDK runtime integration (real SDK + real model)", () => {
       const runtime = new PiRuntime({ cwd: project.dir, logger });
       runtimes.push(runtime);
 
-      // The tmp project sits under the tested repo root, which is trusted.
       await runtime.start();
-      expect(runtime.session?.settingsManager.isProjectTrusted()).toBe(true);
+      // The tmp project sits under the tested repo root, which is trusted.
+      // Trust is resolved independently of the (lazy) session, so it is
+      // visible even before the first prompt creates one.
+      expect(runtime.getStatus().trust).toBe(true);
       // With trust, the project .pi/extensions tool is available (proves
       // project-scoped resources are loaded, not just the global defaults).
       await promptAndExpectMarker(runtime, "trusted789", project.markerFile);
+      expect(runtime.session?.settingsManager.isProjectTrusted()).toBe(true);
     },
     TIMEOUT + 30_000,
   );
@@ -78,7 +83,8 @@ describe("M2: Pi SDK runtime integration (real SDK + real model)", () => {
 
       try {
         await runtime.start();
-        expect(runtime.session?.settingsManager.isProjectTrusted()).toBe(false);
+        // Lazy: no session yet, but trust is reported directly from the store.
+        expect(runtime.getStatus().trust).toBe(false);
       } finally {
         // Restore the inherited trust state so later runs behave the same.
         new ProjectTrustStore(getAgentDir()).set(project.dir, null);
@@ -95,6 +101,8 @@ describe("M2: Pi SDK runtime integration (real SDK + real model)", () => {
       runtimes.push(runtime);
 
       await runtime.start();
+      // First prompt creates the session lazily (no session before this).
+      await promptAndExpectMarker(runtime, "first999", project.markerFile);
       const firstFile = runtime.getStatus().sessionFile;
 
       await runtime.newSession();

@@ -26,6 +26,7 @@ function helpText(): string {
 
 /** Runtime surface needed by commands (satisfied by AgentRuntime). */
 export interface CommandRuntime {
+  hasSession(): boolean;
   abort(): Promise<void>;
   newSession(): Promise<void>;
   compact(): Promise<void>;
@@ -66,6 +67,8 @@ export class CommandRouter {
         return "⏹ 已发送中止指令。";
       case "new":
         if (state !== "IDLE") return "Agent 忙时不能新建会话，请先 /abort 或等待完成。";
+        if (!this.deps.getRuntime().hasSession())
+          return "当前无会话，直接发送消息即可开始新会话。";
         await this.deps.getRuntime().newSession();
         return "✅ 已新建会话。";
       case "compact":

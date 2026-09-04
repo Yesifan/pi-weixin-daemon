@@ -20,7 +20,14 @@
 所依赖的微信 iLink 协议机制与官方参考实现的行为依据（登录产物、端点、媒体 CDN、
 monitor 容错、"两道门"、脱敏等）。**只引用、不发明。**
 
+## 3. 需求与决策记录
+
+- [`requirements/0001-session-trust-fix.md`](requirements/0001-session-trust-fix.md) —— 需求：修复 `PiRuntime` 的 project trust 解析（对齐官方文档）。
+- [`adr/0001-session-project-trust-resolution.md`](adr/0001-session-project-trust-resolution.md) —— ADR-0001：会话项目信任解析采用 pi 官方完整决策链。
+- [`adr/0002-session-lazy-creation-and-status.md`](adr/0002-session-lazy-creation-and-status.md) —— ADR-0002：会话懒创建 + status 暴露 trust + `/new` 不空转。
+
 ## 阅读建议
 
 - 想了解"这系统怎么运作" → 先 `domain-model.md`，再看 `routing.md`。
 - 遇到协议 / 微信行为疑问 → `ilink-protocol.md`。
+- 想了解某项已定方案/待办需求 → 见 `requirements/`、`adr/`。

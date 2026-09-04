@@ -230,6 +230,7 @@ export class Bridge implements UiResponseBroker {
       `Agent state: ${this.state}`,
       `Model: ${status?.model ?? "unknown"}`,
       `Thinking: ${status?.thinkingLevel ?? "unknown"}`,
+      `Trusted: ${status?.trust ?? "?"}`,
     ].join("\n");
   }
 
