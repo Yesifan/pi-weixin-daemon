@@ -1,9 +1,11 @@
 # 需求：修复 PiRuntime 的 session 管理流程（对齐 pi 官方文档）
 
-- 状态：待实施
+- 状态：✅ 已完成
+- 完成提交：`3c4c226`（实现）
+- 版本：0.5.3
+- 涉及 ADR：ADR-0001（project trust 决策链）、ADR-0002（session 懒创建 + status trust + `/new` 不空转）
 - 关联 ADR：`docs/adr/0001-session-project-trust-resolution.md`、
   `docs/adr/0002-session-lazy-creation-and-status.md`
-- 目标版本：polyfill（patch，见版本规则）
 
 ## 需求目标
 
@@ -44,24 +46,24 @@ SDK 无「runtime 存在但无 session」形态，须在 `PiRuntime` 层做懒�
 ## 需求范围（本次实施）
 
 ### 需求 1（本项目核心）：trust 决策链对齐官方
-- [ ] `resolveProjectTrust` 读 `SettingsManager.getDefaultProjectTrust()` 作 fallback，
+- [x] `resolveProjectTrust` 读 `SettingsManager.getDefaultProjectTrust()` 作 fallback，
       不再硬编码 `=== true`。（详 ADR-0001）
 
 ### 需求 2：session 懒创建
-- [ ] `PiRuntime.start()` 不再立即 `createAgentSessionRuntime`；仅初始化 cwd/agentDir 等。
-- [ ] 内部新增 `ensureRuntime()`（或 `ensureSession()`）：首次 `prompt()`（用户发消息）或
+- [x] `PiRuntime.start()` 不再立即 `createAgentSessionRuntime`；仅初始化 cwd/agentDir 等。
+- [x] 内部新增 `ensureRuntime()`（或 `ensureSession()`）：首次 `prompt()`（用户发消息）或
       `newSession()`（`/new`命令）时，才调用 `createAgentSessionRuntime` + `bindSession` +
       设置 `setRebindSession` hook。
-- [ ] `abort()/compact()/getStatus()` 在无 session 时优雅降级（不抛错）。
+- [x] `abort()/compact()/getStatus()` 在无 session 时优雅降级（不抛错）。
 
 ### 需求 3：status 展示 trust
-- [ ] `getStatus()` 增加 `trust` 字段（如 `true | false | "unknown"`）。
-- [ ] trust 解析独立于 session 计算（trust 只读 `trust.json` + `defaultProjectTrust`，
+- [x] `getStatus()` 增加 `trust` 字段（实现为恒 `boolean`，独立计算故无 `unknown`）。
+- [x] trust 解析独立于 session 计算（trust 只读 `trust.json` + `defaultProjectTrust`，
       不依赖 session 是否存在），从而懒建前也能正确上报。
 
 ### 需求 4：`/new` 不空转（已敲定为理解 A）
-- [ ] `/new` 仅在「已有活跃 session」时执行真正重置。
-- [ ] 无活跃 session（项目闲置未建）时，`/new` **不创建空会话**，返回提示：
+- [x] `/new` 仅在「已有活跃 session」时执行真正重置。
+- [x] 无活跃 session（项目闲置未建）时，`/new` **不创建空会话**，返回提示：
       「当前无会话，直接发送消息即可开始新会话」。
 
 ## 非目标（本期不做）

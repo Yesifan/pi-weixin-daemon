@@ -1,8 +1,9 @@
 # ADR-0002：会话懒创建 + status 暴露 trust + `/new` 不空转
 
-- 状态：提议（Proposed）
+- 状态：✅ 已接受（Accepted）
+- 实施提交：`3c4c226`
 - 日期：2026-06-（见 git 提交时间）
-- 关联：`docs/adr/0001-…`、`docs/requirements/0001-session-trust-fix.md`
+- 关联：`docs/adr/0001-session-project-trust-resolution.md`、`docs/requirements/0001-session-trust-fix.md`
 
 ## 背景
 
