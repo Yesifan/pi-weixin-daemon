@@ -70,7 +70,7 @@ describe("M9 e2e: extension UI dialogs completed over weixin (real SDK)", () => 
     async () => {
       const { project, transport, session } = await setupProject("m9-confirm");
 
-      const turnPromise = session.handleMessage(
+      const turnPromise = session.handleUserMessage(
         makeInboundMessage({
           accountId: "acct-a",
           senderId: "user-a",
@@ -84,7 +84,7 @@ describe("M9 e2e: extension UI dialogs completed over weixin (real SDK)", () => 
       expect(session.getState()).toBe("busy");
 
       // Turn account answers.
-      await session.handleMessage(
+      await session.handleUserMessage(
         makeInboundMessage({ accountId: "acct-a", senderId: "user-a", messageId: "m2", text: "1" }),
       );
 
@@ -101,7 +101,7 @@ describe("M9 e2e: extension UI dialogs completed over weixin (real SDK)", () => 
     async () => {
       const { project, transport, session } = await setupProject("m9-select");
 
-      const turnPromise = session.handleMessage(
+      const turnPromise = session.handleUserMessage(
         makeInboundMessage({
           accountId: "acct-a",
           senderId: "user-a",
@@ -113,7 +113,7 @@ describe("M9 e2e: extension UI dialogs completed over weixin (real SDK)", () => 
       await waitForText(transport, "选择部署环境");
       expect(session.getState()).toBe("busy");
 
-      await session.handleMessage(
+      await session.handleUserMessage(
         makeInboundMessage({ accountId: "acct-a", senderId: "user-a", messageId: "m2", text: "2" }),
       );
 
@@ -130,7 +130,7 @@ describe("M9 e2e: extension UI dialogs completed over weixin (real SDK)", () => 
     async () => {
       const { project, transport, session } = await setupProject("m9-input");
 
-      const turnPromise = session.handleMessage(
+      const turnPromise = session.handleUserMessage(
         makeInboundMessage({
           accountId: "acct-a",
           senderId: "user-a",
@@ -142,7 +142,7 @@ describe("M9 e2e: extension UI dialogs completed over weixin (real SDK)", () => 
       await waitForText(transport, "输入版本号");
       expect(session.getState()).toBe("busy");
 
-      await session.handleMessage(
+      await session.handleUserMessage(
         makeInboundMessage({ accountId: "acct-a", senderId: "user-a", messageId: "m2", text: "v9.9.9" }),
       );
 

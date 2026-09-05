@@ -1,8 +1,8 @@
 import type { InteractionPort } from "../pi/ports.js";
 import type { SessionRuntimePort } from "../sessions/runtime-port.js";
-import { parseCommand } from "../sessions/commands.js";
 import { SessionController } from "../sessions/session-controller.js";
 import { CurrentTurn, toTurnContext } from "../sessions/turn-context.js";
+import { CommandRouter } from "./command-router.js";
 import { WeixinInteractionController } from "../weixin/interaction-controller.js";
 import type {
   InboundMessage,
@@ -73,6 +73,7 @@ export class ProjectRuntime {
   error?: string;
 
   private session?: SessionController;
+  private readonly router = new CommandRouter();
 
   /** Registered project senders (real senderId, not account.userId). */
   private readonly participants = new Map<string, Participant>();
@@ -150,16 +151,29 @@ export class ProjectRuntime {
       return;
     }
 
-    // ③ Notify other project participants when a sender speaks (ordinary messages only).
-    if (!parseCommand(msg.text)) {
-      await this.notifyOthers(msg).catch((err: unknown) =>
-        this.opts.logger.warn({ err, project: this.projectId }, "notify others failed"),
-      );
+    const session = this.requireSession();
+    const routed = this.router.classify(msg.text);
+
+    // W4: only the daemon's explicitly-mapped commands enter slash handling.
+    if (routed.kind === "daemon-command") {
+      await session.handleCommand(routed.command, msg);
+      this.reflectState(session);
+      return;
+    }
+    if (routed.kind === "unknown-command") {
+      await this.opts.transport
+        .sendText(toTurnContext(msg), `未知命令 /${routed.text}，输入 /help 查看可用命令。`)
+        .catch((err: unknown) => this.opts.logger.warn({ err, project: this.projectId }, "unknown-command reply failed"));
+      return;
     }
 
-    const session = this.requireSession();
+    // ③ Notify other project participants when a sender speaks (ordinary messages only).
+    await this.notifyOthers(msg).catch((err: unknown) =>
+      this.opts.logger.warn({ err, project: this.projectId }, "notify others failed"),
+    );
+
     try {
-      await session.handleMessage(msg);
+      await session.handleUserMessage(msg);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.opts.logger.warn({ err, project: this.projectId }, "project message handling error");
@@ -168,15 +182,18 @@ export class ProjectRuntime {
       return;
     }
 
-    // Reflect the session state machine into the project lifecycle state.
-    if (this.state !== "stopping") {
-      const s = session.getState();
-      if (s === "busy" || s === "replacing") this.state = "busy";
-      else if (s === "faulted") {
-        this.state = "error";
-        this.error = this.error ?? "session faulted";
-      } else this.state = "idle";
-    }
+    this.reflectState(session);
+  }
+
+  /** Reflect the session state machine into the project lifecycle state. */
+  private reflectState(session: SessionController): void {
+    if (this.state === "stopping") return;
+    const s = session.getState();
+    if (s === "busy" || s === "replacing") this.state = "busy";
+    else if (s === "faulted") {
+      this.state = "error";
+      this.error = this.error ?? "session faulted";
+    } else this.state = "idle";
   }
 
   async stop(): Promise<void> {

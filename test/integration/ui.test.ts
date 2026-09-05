@@ -44,7 +44,7 @@ describe("M9 interaction controller UI response routing", () => {
   it("turn account's next message resolves the UI waiter; other accounts get busy", async () => {
     const { runtime, transportA, transportB, interaction, session } = setupUiRouting();
     // Start a real turn so currentTurn is set (as in production).
-    const turnPromise = session.handleMessage(msg("acct-a", "user-a", "t0", "开始任务"));
+    const turnPromise = session.handleUserMessage(msg("acct-a", "user-a", "t0", "开始任务"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
     expect(session.getState()).toBe("busy");
 
@@ -54,11 +54,11 @@ describe("M9 interaction controller UI response routing", () => {
     responsePromise.then((text) => (resolved = text));
 
     // Other account -> busy
-    await session.handleMessage(msg("acct-b", "user-b", "b1", "hi"));
+    await session.handleUserMessage(msg("acct-b", "user-b", "b1", "hi"));
     expect(transportB.textsTo("acct-b")).toEqual([BUSY_REPLY]);
 
     // Turn account -> UI response
-    await session.handleMessage(msg("acct-a", "user-a", "a1", "1"));
+    await session.handleUserMessage(msg("acct-a", "user-a", "a1", "1"));
     expect(resolved).toBe("1");
 
     interaction.endUiInteraction();

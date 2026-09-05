@@ -1,12 +1,7 @@
-/** Parse a command like "/status" or "/new" from message text. */
-export function parseCommand(
-  text: string | undefined,
-): { name: string; args: string } | undefined {
-  if (!text) return undefined;
-  const m = /^\/([a-z][a-z0-9-]*)\s*(.*)$/i.exec(text.trim());
-  if (!m) return undefined;
-  return { name: m[1]!.toLowerCase(), args: m[2]!.trim() };
-}
+/** Daemon-owned host commands (the only `/` inputs handled, W4/ADR-0003 D-D). */
+export const DAEMON_COMMANDS = ["help", "status", "abort", "new", "compact"] as const;
+
+export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];
 
 export function helpText(): string {
   return [

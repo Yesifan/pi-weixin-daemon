@@ -43,12 +43,12 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
   it("A starts a turn; B gets busy refusal; completion replies only to A", async () => {
     const { runtime, transport, session } = setup();
 
-    const turnPromise = session.handleMessage(msgA("帮我写个计划"));
+    const turnPromise = session.handleUserMessage(msgA("帮我写个计划"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
     expect(runtime.prompts[0]?.text).toBe("帮我写个计划");
     expect(session.getState()).toBe("busy");
 
-    await session.handleMessage(msgB("你好"));
+    await session.handleUserMessage(msgB("你好"));
     expect(transport.textsTo("acct-b")).toEqual([BUSY_REPLY]);
     expect(transport.textsTo("acct-a")).toEqual([]);
 
@@ -63,7 +63,7 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
   it("sets typing before the run and clears it after", async () => {
     const { runtime, transport, session } = setup();
 
-    const turnPromise = session.handleMessage(msgA("hello"));
+    const turnPromise = session.handleUserMessage(msgA("hello"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
 
     expect(transport.typingEvents.map((t) => t.typing)).toEqual([true]);
@@ -78,12 +78,12 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
   it("two consecutive turns on the same account work", async () => {
     const { runtime, transport, session } = setup();
 
-    const t1 = session.handleMessage(msgA("first", "m1"));
+    const t1 = session.handleUserMessage(msgA("first", "m1"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
     runtime.complete("reply one");
     await t1;
 
-    const t2 = session.handleMessage(msgA("second", "m2"));
+    const t2 = session.handleUserMessage(msgA("second", "m2"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(2));
     runtime.complete("reply two");
     await t2;
@@ -95,7 +95,7 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
   it("agent error produces an error reply to the turn origin", async () => {
     const { runtime, transport, session } = setup();
 
-    const turnPromise = session.handleMessage(msgA("boom"));
+    const turnPromise = session.handleUserMessage(msgA("boom"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
     runtime.fail(new Error("provider exploded"));
     await turnPromise;
@@ -108,10 +108,10 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
 describe("M6 commands over weixin", () => {
   it("/status works while running", async () => {
     const { runtime, transport, session } = setup();
-    const turnPromise = session.handleMessage(msgA("task"));
+    const turnPromise = session.handleUserMessage(msgA("task"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
 
-    await session.handleMessage(msgA("/status", "m-status"));
+    await session.handleCommand("status", msgA("/status", "m-status"));
     const statusReply = transport.textsTo("acct-a").at(-1)!;
     expect(statusReply).toContain("Project:");
     expect(statusReply).toContain("Agent state: busy");
@@ -126,27 +126,27 @@ describe("M6 commands over weixin", () => {
   it("/new is refused while running, allowed when idle", async () => {
     const { runtime, transport, session } = setup();
 
-    const turnPromise = session.handleMessage(msgA("task"));
+    const turnPromise = session.handleUserMessage(msgA("task"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
 
-    await session.handleMessage(msgA("/new", "m-new-busy"));
+    await session.handleCommand("new", msgA("/new", "m-new-busy"));
     expect(transport.textsTo("acct-a").at(-1)).toContain("忙时不能新建会话");
     expect(runtime.newSessionCalls).toBe(0);
 
     runtime.complete("done");
     await turnPromise;
 
-    await session.handleMessage(msgA("/new", "m-new-idle"));
+    await session.handleCommand("new", msgA("/new", "m-new-idle"));
     expect(runtime.newSessionCalls).toBe(1);
   });
 
   it("/abort terminates the running agent and notifies the turn origin", async () => {
     const { runtime, transport, session } = setup();
 
-    const turnPromise = session.handleMessage(msgA("long task"));
+    const turnPromise = session.handleUserMessage(msgA("long task"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
 
-    await session.handleMessage(msgA("/abort", "m-abort"));
+    await session.handleCommand("abort", msgA("/abort", "m-abort"));
     await turnPromise;
 
     expect(runtime.prompts.length).toBe(1); // no second prompt
@@ -154,11 +154,6 @@ describe("M6 commands over weixin", () => {
     expect(session.getState()).toBe("ready");
   });
 
-  it("unknown command gets a hint", async () => {
-    const { transport, session } = setup();
-    await session.handleMessage(msgA("/frobnicate"));
-    expect(transport.textsTo("acct-a").at(-1)).toContain("未知命令");
-  });
 });
 
 describe("M8 media routing through the session controller", () => {
@@ -170,7 +165,7 @@ describe("M8 media routing through the session controller", () => {
     fs.mkdirSync(path.dirname(imgPath), { recursive: true });
     fs.writeFileSync(imgPath, Buffer.from(pngBase64, "base64"));
 
-    const turnPromise = session.handleMessage(
+    const turnPromise = session.handleUserMessage(
       makeInboundMessage({
         accountId: "acct-a",
         senderId: "user-a",
@@ -197,7 +192,7 @@ describe("M8 media routing through the session controller", () => {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, "a,b\n1,2\n");
 
-    const turnPromise = session.handleMessage(
+    const turnPromise = session.handleUserMessage(
       makeInboundMessage({
         accountId: "acct-a",
         senderId: "user-a",
@@ -218,7 +213,7 @@ describe("M8 media routing through the session controller", () => {
 
   it("media download failures are injected into the prompt as a note", async () => {
     const { runtime, session } = setup();
-    const turnPromise = session.handleMessage(
+    const turnPromise = session.handleUserMessage(
       makeInboundMessage({
         accountId: "acct-a",
         senderId: "user-a",
@@ -242,7 +237,7 @@ describe("M8 media routing through the session controller", () => {
 describe("M9 sender marker + broadcast hook", () => {
   it("appends -- from weixin <name> to the prompt", async () => {
     const { runtime, session } = setup({ senderLabel: (m) => `bot-${m.accountId}` });
-    const turnPromise = session.handleMessage(
+    const turnPromise = session.handleUserMessage(
       makeInboundMessage({ accountId: "acct-a", senderId: "user-a", text: "hi" }),
     );
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
@@ -260,7 +255,7 @@ describe("M9 sender marker + broadcast hook", () => {
       },
     });
 
-    const turnPromise = session.handleMessage(
+    const turnPromise = session.handleUserMessage(
       makeInboundMessage({ accountId: "acct-a", senderId: "user-a", text: "hi" }),
     );
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));

@@ -2,7 +2,7 @@ import type { InteractionPort } from "../pi/ports.js";
 import type { SessionRuntimePort } from "./runtime-port.js";
 import type { Logger } from "../util/logger.js";
 import type { InboundMessage, TurnContext, WeixinTransport } from "../weixin/types.js";
-import { helpText, parseCommand } from "./commands.js";
+import { helpText, type DaemonCommand } from "./commands.js";
 import { buildPromptInput } from "./prompt.js";
 import { ResponseAccumulator } from "./response-accumulator.js";
 import { BUSY_REPLY, type SessionState } from "./session-state.js";
@@ -30,9 +30,9 @@ export interface SessionControllerDeps {
 /**
  * Single session lifecycle state machine (ADR-0004 Invariant 2).
  *
- * Owns: turn serialization (busy refusal), idle timer (real dispose), command
- * execution, and the `inactive/ready/busy/replacing/faulted` transitions. There
- * is no second busy/turn signal — the state machine is the only source of truth.
+ * Owns: turn serialization (busy refusal), idle timer (real dispose), and the
+ * `inactive/ready/busy/replacing/faulted` transitions. Command *classification*
+ * lives in the project layer (`CommandRouter`); command *execution* lives here.
  */
 export class SessionController {
   private state: SessionState = "inactive";
@@ -70,69 +70,16 @@ export class SessionController {
     this.state = "inactive";
   }
 
-  /** Route one inbound message: UI answer → command → ordinary user message. */
-  async handleMessage(msg: InboundMessage): Promise<void> {
+  /** Execute an explicitly-mapped daemon command (classification done upstream). */
+  async handleCommand(command: DaemonCommand, msg: InboundMessage): Promise<void> {
     this.lastActivityAt = Date.now();
     this.scheduleIdleCheck();
 
-    // UI answer routing: only the turn origin resolves the pending dialog.
-    if (this.deps.interaction.isUiInteractionActive()) {
-      const turn = this.deps.currentTurn.get();
-      if (turn && msg.accountId === turn.accountId && msg.senderId === turn.senderId) {
-        this.deps.logger.info({ accountId: msg.accountId }, "UI response received");
-        this.deps.interaction.tryResolveUi(turn, msg.text ?? "");
-      } else {
-        this.deps.logger.info({ accountId: msg.accountId, senderId: msg.senderId }, "busy refusal (ui)");
-        await this.reply(toTurnContext(msg), BUSY_REPLY);
-      }
-      return;
-    }
-
-    const cmd = parseCommand(msg.text);
-    if (cmd) {
-      await this.handleCommand(cmd.name, msg);
-      return;
-    }
-
-    await this.handleUserMessage(msg);
-  }
-
-  private async handleUserMessage(msg: InboundMessage): Promise<void> {
-    const turn = toTurnContext(msg);
-
-    if (this.state === "busy" || this.state === "replacing") {
-      this.deps.logger.info({ accountId: msg.accountId, senderId: msg.senderId, state: this.state }, "busy refusal");
-      await this.reply(turn, BUSY_REPLY);
-      return;
-    }
-    if (this.state === "faulted") {
-      await this.reply(turn, `⚠️ 项目会话不可用：${this.error ?? "unknown error"}`);
-      return;
-    }
-
-    // inactive → ready (fresh session); failure → faulted (never prompt).
-    if (this.state === "inactive") {
-      try {
-        await this.deps.host.ensureSession();
-        this.state = "ready";
-      } catch (err) {
-        this.state = "faulted";
-        this.error = err instanceof Error ? err.message : String(err);
-        this.deps.logger.error({ err, project: this.deps.projectId }, "session creation failed");
-        await this.reply(turn, `⚠️ 项目启动失败，已拒绝消息：${this.error}`);
-        return;
-      }
-    }
-
-    await this.runTurn(msg);
-  }
-
-  private async handleCommand(name: string, msg: InboundMessage): Promise<void> {
     const turn = toTurnContext(msg);
     const log = this.deps.logger;
-    log.info({ command: name, accountId: msg.accountId }, "command");
+    log.info({ command, accountId: msg.accountId }, "command");
 
-    switch (name) {
+    switch (command) {
       case "help":
         await this.reply(turn, helpText());
         return;
@@ -176,10 +123,54 @@ export class SessionController {
         await this.deps.host.compact();
         await this.reply(turn, "✅ 已请求会话压缩。");
         return;
-      default:
-        await this.reply(turn, `未知命令 /${name}，输入 /help 查看可用命令。`);
-        return;
     }
+  }
+
+  /** Route an ordinary user message (UI answer, busy refusal, or a new turn). */
+  async handleUserMessage(msg: InboundMessage): Promise<void> {
+    this.lastActivityAt = Date.now();
+    this.scheduleIdleCheck();
+
+    // UI answer routing: only the turn origin resolves the pending dialog.
+    if (this.deps.interaction.isUiInteractionActive()) {
+      const turn = this.deps.currentTurn.get();
+      if (turn && msg.accountId === turn.accountId && msg.senderId === turn.senderId) {
+        this.deps.logger.info({ accountId: msg.accountId }, "UI response received");
+        this.deps.interaction.tryResolveUi(turn, msg.text ?? "");
+      } else {
+        this.deps.logger.info({ accountId: msg.accountId, senderId: msg.senderId }, "busy refusal (ui)");
+        await this.reply(toTurnContext(msg), BUSY_REPLY);
+      }
+      return;
+    }
+
+    const turn = toTurnContext(msg);
+
+    if (this.state === "busy" || this.state === "replacing") {
+      this.deps.logger.info({ accountId: msg.accountId, senderId: msg.senderId, state: this.state }, "busy refusal");
+      await this.reply(turn, BUSY_REPLY);
+      return;
+    }
+    if (this.state === "faulted") {
+      await this.reply(turn, `⚠️ 项目会话不可用：${this.error ?? "unknown error"}`);
+      return;
+    }
+
+    // inactive → ready (fresh session); failure → faulted (never prompt).
+    if (this.state === "inactive") {
+      try {
+        await this.deps.host.ensureSession();
+        this.state = "ready";
+      } catch (err) {
+        this.state = "faulted";
+        this.error = err instanceof Error ? err.message : String(err);
+        this.deps.logger.error({ err, project: this.deps.projectId }, "session creation failed");
+        await this.reply(turn, `⚠️ 项目启动失败，已拒绝消息：${this.error}`);
+        return;
+      }
+    }
+
+    await this.runTurn(msg);
   }
 
   private async runTurn(msg: InboundMessage): Promise<void> {

@@ -84,6 +84,17 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
     expect(h.transports.get("B")!.textsTo("B")).toContain("final answer");
   });
 
+  it("unknown /bar is refused with a hint (W4), never treated as a message", async () => {
+    const h = setup();
+    await h.pm.sync(fooConfig as never);
+
+    await h.pm.dispatch("A", textMsg("A", "u-a", "m1", "/bar"));
+    await tick();
+
+    expect(h.transports.get("A")!.textsTo("A").at(-1)).toContain("未知命令 /bar");
+    expect(h.fakes.get("foo")!.prompts).toHaveLength(0);
+  });
+
   it("auto-closes an idle session: notifies + creates a fresh session on next message", async () => {
     const h = setup({ sessionIdleMs: 40 });
     await h.pm.sync(fooConfig as never);

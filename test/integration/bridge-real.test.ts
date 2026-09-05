@@ -47,7 +47,7 @@ describe("M6 e2e: weixin -> real Pi runtime -> weixin", () => {
         logger,
       });
 
-      const turnPromise = session.handleMessage(
+      const turnPromise = session.handleUserMessage(
         makeInboundMessage({
           accountId: "acct-a",
           senderId: "user-a",
