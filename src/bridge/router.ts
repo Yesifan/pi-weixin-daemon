@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { InteractionPort } from "../pi/ports.js";
+import { PiInitializationError } from "../pi/runtime-factory.js";
 import type { HostImage, HostPromptInput } from "../pi/types.js";
 import type { SessionRuntimePort } from "../sessions/runtime-port.js";
 import { CurrentTurn, toTurnContext } from "../sessions/turn-context.js";
@@ -146,6 +147,10 @@ export class Bridge implements InteractionPort {
         await accumulator.settled;
         finalText = accumulator.accumulatedText.trim();
       } catch (err) {
+        // A fatal initialization error (bad extension / settings / services) is
+        // a per-project fail-closed condition: propagate it so the project goes
+        // into the error state and refuses further messages (W1).
+        if (err instanceof PiInitializationError) throw err;
         log.warn({ err }, "agent run failed");
         finalText = describeRunError(err);
       } finally {
@@ -244,7 +249,8 @@ export class Bridge implements InteractionPort {
       `Agent state: ${this.state}`,
       `Model: ${status?.model ?? "unknown"}`,
       `Thinking: ${status?.thinkingLevel ?? "unknown"}`,
-      `Trusted: ${status?.configuredTrust ?? "?"}`,
+      `Configured trust: ${status?.configuredTrust ?? "?"}`,
+      `Active session trust: ${status?.activeSessionTrust ?? "(no session)"}`,
     ].join("\n");
   }
 

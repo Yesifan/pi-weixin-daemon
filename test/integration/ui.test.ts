@@ -250,6 +250,23 @@ describe("M9 WeixinUIContext dialogs", () => {
     expect(transport.sentTexts[0]!.text).toContain("任务完成");
   });
 
+  it("custom()/editor()/theme degrade without throwing (W6)", async () => {
+    const { broker, ui } = setupUi();
+
+    // custom() resolves undefined (never rejects).
+    await expect(ui.custom(() => undefined as never)).resolves.toBeUndefined();
+
+    // editor() degrades to the input dialog (prefill hint + next message).
+    const p = ui.editor("编辑内容", "prefill");
+    await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
+    broker.resolveWith("new text");
+    await expect(p).resolves.toBe("new text");
+
+    // theme is a real Theme instance (never {} as Theme).
+    expect(ui.theme).toBeDefined();
+    expect(typeof ui.theme.fg).toBe("function");
+  });
+
   it("notify with no active turn is a no-op", () => {
     const transport = new FakeWeixinTransport();
     const broker = new FakeInteraction(undefined, transport);

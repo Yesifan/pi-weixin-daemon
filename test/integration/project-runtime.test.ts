@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { ProjectManager } from "../../src/projects/project-manager.js";
+import { PiInitializationError } from "../../src/pi/runtime-factory.js";
 import { createLogger } from "../../src/util/logger.js";
 import type { ProjectConfig } from "../../src/projects/types.js";
 import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transport.js";
@@ -112,5 +113,39 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
     h.fakes.get("foo")!.complete("replied");
     await pC;
     expect(h.transports.get("A")!.textsTo("A")).toContain("replied");
+  });
+});
+
+describe("ProjectRuntime: W1 fail-closed diagnostics", () => {
+  it("fatal init error -> project error state + refuses further messages", async () => {
+    const transports = new Map<string, FakeWeixinTransport>();
+    const getTransport = (id: string) => {
+      if (!transports.has(id)) transports.set(id, new FakeWeixinTransport());
+      return transports.get(id)!;
+    };
+
+    class FatalRuntime extends FakeAgentRuntime {
+      override async prompt(): Promise<void> {
+        throw new PiInitializationError("extension load error (bad.ts): boom");
+      }
+    }
+
+    const pm = new ProjectManager({
+      getTransport,
+      factory: async (ctx) => new FatalRuntime(ctx.cwd),
+      logger,
+    });
+    await pm.sync([{ name: "foo", config: { cwd: "/fake/foo", accounts: ["A"], enabled: true } }]);
+
+    // First message triggers lazy runtime build -> fatal init error -> project error.
+    await pm.dispatch("A", textMsg("A", "u-a", "m1", "hello"));
+    await tick();
+    expect(pm.getRuntime("foo")!.getStatus().state).toBe("error");
+
+    // Further messages are refused with the reason.
+    await pm.dispatch("A", textMsg("A", "u-a", "m2", "again"));
+    await tick();
+    const replies = transports.get("A")!.textsTo("A");
+    expect(replies.at(-1)).toContain("项目启动失败");
   });
 });

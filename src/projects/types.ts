@@ -33,6 +33,10 @@ export interface ProjectStatus {
   sessionFile?: string;
   sessionId?: string;
   model?: string;
+  /** Live project-trust decision (W7). */
+  configuredTrust?: boolean;
+  /** Trust snapshot locked when the session was created (W7). */
+  activeSessionTrust?: boolean;
   error?: string;
 }
 

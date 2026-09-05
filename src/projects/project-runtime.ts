@@ -1,5 +1,6 @@
 import type { InteractionPort } from "../pi/ports.js";
 import type { SessionRuntimePort } from "../sessions/runtime-port.js";
+import { toTurnContext } from "../sessions/turn-context.js";
 import { parseCommand } from "../bridge/commands.js";
 import { Bridge } from "../bridge/router.js";
 import type {
@@ -54,7 +55,8 @@ export interface RuntimeStatusView {
   sessionFile?: string;
   sessionId?: string;
   model?: string;
-  trust?: boolean;
+  configuredTrust?: boolean;
+  activeSessionTrust?: boolean;
   error?: string;
 }
 
@@ -136,6 +138,18 @@ export class ProjectRuntime {
     //    project scope, not an init/global-only state.
     await this.started;
 
+    // W1 fail-closed: a fatal initialization error put this project into the
+    // error state. Refuse messages (per-project isolation; daemon keeps running).
+    if (this.state === "error") {
+      const reason = this.error ?? "unknown error";
+      await this.opts.transport
+        .sendText(toTurnContext(msg), `⚠️ 项目启动失败，已拒绝消息：${reason}`)
+        .catch((err: unknown) =>
+          this.opts.logger.warn({ err, project: this.projectId }, "error reply failed (ignored)"),
+        );
+      return;
+    }
+
     // ① A session was auto-closed while idle: start a fresh one on next message.
     if (this.sessionExpired) {
       this.sessionExpired = false;
@@ -158,7 +172,7 @@ export class ProjectRuntime {
     try {
       await bridge.ingest(msg);
       // Bridge may flip to busy/RUNNING during the turn; reflect lifecycle only.
-      if (this.state !== "error" && this.state !== "stopping") {
+      if (this.state !== "stopping") {
         this.state = bridge.getState() === "IDLE" ? "idle" : "busy";
       }
     } catch (err) {
@@ -212,7 +226,8 @@ export class ProjectRuntime {
       sessionFile: s?.sessionFile,
       sessionId: s?.sessionId,
       model: s?.model,
-      trust: s?.configuredTrust,
+      configuredTrust: s?.configuredTrust,
+      activeSessionTrust: s?.activeSessionTrust,
       error: this.error,
     };
   }

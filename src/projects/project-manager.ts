@@ -125,6 +125,8 @@ export class ProjectManager {
         sessionFile: st?.sessionFile,
         sessionId: st?.sessionId,
         model: st?.model,
+        configuredTrust: st?.configuredTrust,
+        activeSessionTrust: st?.activeSessionTrust,
         error: st?.error,
       };
     });
