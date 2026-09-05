@@ -1,7 +1,7 @@
 # ADR-0004：分层与依赖方向（PiSdkHost / SessionController / ProjectController）
 
-- 状态：✅ 已接受（Accepted，`0.5.5`）
-- 目标版本：0.5.5
+- 状态：✅ 已接受（Accepted，`0.6.0`）
+- 目标版本：0.6.0
 - 日期：见 git 提交时间
 - 关联：`docs/requirements/0002-pi-host-compatibility.md`（v3）、ADR-0001/0002/0003
 

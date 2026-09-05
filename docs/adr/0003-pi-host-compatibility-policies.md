@@ -1,7 +1,7 @@
 # ADR-0003：Pi host 兼容性策略（fail-closed / runtime-key / idle 真关闭 / host 命令域 / UI 降级 / trust 双字段）
 
-- 状态：✅ 已接受（Accepted，`0.5.5`）
-- 目标版本：0.5.5
+- 状态：✅ 已接受（Accepted，`0.6.0`）
+- 目标版本：0.6.0
 - 日期：见 git 提交时间
 - 关联：`docs/requirements/0002-pi-host-compatibility.md`（v2）、ADR-0001/0002
 - 修订：依需求目标调整 D-B（cwd 固定，runtime-key = accounts）、D-D（只认 daemon 显式命令，

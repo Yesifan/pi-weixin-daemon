@@ -1,7 +1,7 @@
 # 需求：Pi host 兼容性重构 —— 架构优先，五阶段（对齐 pi 0.84.4 host 语义）
 
-- 状态：✅ 已完成（`0.5.5`，五阶段逐步提交）
-- 目标版本：0.5.5（无 BREAKING → patch）
+- 状态：✅ 已完成（`0.6.0`，五阶段逐步提交）
+- 目标版本：0.6.0（删 `project set` 按 BREAKING → minor）
 - 涉及 ADR：`docs/adr/0003-pi-host-compatibility-policies.md`（行为策略）、
   `docs/adr/0004-layering-and-dependency-direction.md`（分层与依赖方向）
 - 关联：`docs/requirements/0001-session-trust-fix.md`、ADR-0001/0002
@@ -163,10 +163,9 @@
 
 ## 版本与变更记录（计划）
 
-- 0.5.4 → **0.5.5**（patch；无 BREAKING）。删 `project set` 属功能移除但非「需手动升级的破坏」，
-  如需按 BREAKING 处理则升 0.6.0 —— 由你定夺。
+- 0.5.4 → **0.6.0**（minor；删 `project set` 按 BREAKING 处理，需手动升级的项目重建）。
 - 实施完成后：本文件置 ✅、ADR-0003/0004 置 Accepted、`docs/requirements/README.md` 索引、
-  CHANGELOG 新增 0.5.5。
+  CHANGELOG 新增 0.6.0。
 
 ## 相关文档
 

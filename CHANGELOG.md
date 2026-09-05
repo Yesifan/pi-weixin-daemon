@@ -7,7 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
-## [0.5.5]
+## [0.6.0]
+
+### BREAKING CHANGES
+
+- **删除 `project set`**：`cwd` 创建后固定不可改（CLI `project set`、RPC
+  `project.set`、`daemon.setProjectCwd()` 全链路移除）；`ProjectStore` 对已存在
+  项目断言不改 cwd。需要改 `cwd` 的项目需删除后重建（并重新绑定账号）。
 
 ### Changed
 
@@ -34,10 +40,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ### Removed
 
-- **删除 `project set`**：`cwd` 创建后固定（CLI/RPC/daemon 全链路移除）；
-  `ProjectStore` 对已存在项目断言不改 cwd。accounts 变更 → runtime-key
-  （`sorted(accounts)`）变化 → restart。
 - 删除 `sessionExpired`（由单一状态机 `inactive/ready/busy/replacing/faulted` 取代）。
+
+### Upgrade
+
+- 若已有项目需要改 `cwd`：`pi-wx project remove <name>` 后
+  `pi-wx project create <name> --cwd <新路径>`，再重新 `project <name> add <label>` 绑定账号。
 
 ---
 
