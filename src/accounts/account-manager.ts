@@ -1,4 +1,4 @@
-import type { InboundMessage, WeixinTransport } from "../bridge/types.js";
+import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
 import type { Logger } from "../util/logger.js";
 import type { AccountInfo, AccountStatus } from "../projects/types.js";
 

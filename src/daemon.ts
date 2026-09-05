@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PiRuntime } from "./agent/runtime.js";
-import { createWeixinRuntimeExtension } from "./agent/runtime-extension.js";
-import { WeixinUIContext } from "./agent/ui-context.js";
+import { PiSdkHost } from "./pi/sdk-host.js";
+import { createWeixinSendFileExtension } from "./pi/extensions/weixin-send-file.js";
+import { WeixinUIContext } from "./pi/ui-context.js";
 import { AccountManager } from "./accounts/account-manager.js";
-import type { InboundMessage, WeixinTransport } from "./bridge/types.js";
+import type { WeixinTransport } from "./weixin/types.js";
 import { migrateLegacyAccounts } from "./config/paths.js";
 import { ProjectManager } from "./projects/project-manager.js";
 import type {
@@ -43,31 +43,26 @@ export interface DaemonDeps {
   rpcSocketPath?: string;
 }
 
-/** Default project Pi factory: weixin tool + UI context wired to the project bridge. */
-async function createProjectPiRuntime(ctx: ProjectRuntimeFactoryContext): Promise<PiRuntime> {
-  const { cwd, transport, bridge, logger } = ctx;
+/** Default project Pi factory: weixin tool + UI context wired to the project interaction port. */
+async function createProjectPiRuntime(ctx: ProjectRuntimeFactoryContext): Promise<PiSdkHost> {
+  const { cwd, transport, interaction, logger } = ctx;
   const tmpDir = path.join(cwd, ".pi-weixin", "tmp");
   const inboxDir = path.join(cwd, ".pi-weixin", "inbox");
   fs.mkdirSync(tmpDir, { recursive: true });
   fs.mkdirSync(inboxDir, { recursive: true });
-  return new PiRuntime({
+  return new PiSdkHost({
     cwd,
     logger,
     extensionFactories: [
-      createWeixinRuntimeExtension({
-        transport,
-        getCurrentTurn: () => bridge.getCurrentTurn(),
+      createWeixinSendFileExtension({
+        fileSender: { sendFile: (turn, p, caption) => transport.sendFile(turn, p, caption) },
+        getCurrentTurn: () => interaction.getCurrentTurn(),
         cwd,
         tmpDir,
         logger,
       }),
     ],
-    uiContext: new WeixinUIContext({
-      broker: bridge,
-      transport,
-      getCurrentTurn: () => bridge.getCurrentTurn(),
-      logger,
-    }),
+    uiContext: new WeixinUIContext({ interaction, logger }),
   });
 }
 

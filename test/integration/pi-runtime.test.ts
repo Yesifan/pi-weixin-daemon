@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { getAgentDir, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
-import { PiRuntime } from "../../src/agent/runtime.js";
+import { PiSdkHost } from "../../src/pi/sdk-host.js";
 import { createLogger } from "../../src/util/logger.js";
 import { createTmpProject, waitForMarker, type TmpProject } from "../helpers/tmp-project.js";
 
@@ -8,10 +8,10 @@ const logger = createLogger({ level: "warn" });
 
 const TIMEOUT = 120_000;
 
-async function promptAndExpectMarker(runtime: PiRuntime, input: string, markerFile: string): Promise<string> {
-  await runtime.prompt(
-    `请调用 mark_test_tool 工具，参数 input 的值为 ${input}。只调用这个工具，不要做其他事情。`,
-  );
+async function promptAndExpectMarker(runtime: PiSdkHost, input: string, markerFile: string): Promise<string> {
+  await runtime.prompt({
+    text: `请调用 mark_test_tool 工具，参数 input 的值为 ${input}。只调用这个工具，不要做其他事情。`,
+  });
   const marker = await waitForMarker(markerFile, TIMEOUT);
   expect(marker).toContain(`input=${input}`);
   return marker;
@@ -19,7 +19,7 @@ async function promptAndExpectMarker(runtime: PiRuntime, input: string, markerFi
 
 describe("M2: Pi SDK runtime integration (real SDK + real model)", () => {
   let project: TmpProject | undefined;
-  const runtimes: PiRuntime[] = [];
+  const runtimes: PiSdkHost[] = [];
 
   afterEach(async () => {
     for (const r of runtimes.splice(0)) {
@@ -31,7 +31,7 @@ describe("M2: Pi SDK runtime integration (real SDK + real model)", () => {
     "loads project .pi/extensions and executes its tool in a daemon-created session",
     async () => {
       project = createTmpProject("m2-ext-load");
-      const runtime = new PiRuntime({ cwd: project.dir, logger });
+      const runtime = new PiSdkHost({ cwd: project.dir, logger });
       runtimes.push(runtime);
 
       await runtime.start();
@@ -55,18 +55,18 @@ describe("M2: Pi SDK runtime integration (real SDK + real model)", () => {
     "resolves project trust from the shared trust store (project scope honored)",
     async () => {
       project = createTmpProject("m2-trusted");
-      const runtime = new PiRuntime({ cwd: project.dir, logger });
+      const runtime = new PiSdkHost({ cwd: project.dir, logger });
       runtimes.push(runtime);
 
       await runtime.start();
       // The tmp project sits under the tested repo root, which is trusted.
       // Trust is resolved independently of the (lazy) session, so it is
       // visible even before the first prompt creates one.
-      expect(runtime.getStatus().trust).toBe(true);
+      expect(runtime.getStatus().configuredTrust).toBe(true);
       // With trust, the project .pi/extensions tool is available (proves
       // project-scoped resources are loaded, not just the global defaults).
       await promptAndExpectMarker(runtime, "trusted789", project.markerFile);
-      expect(runtime.session?.settingsManager.isProjectTrusted()).toBe(true);
+      expect(runtime.getStatus().activeSessionTrust).toBe(true);
     },
     TIMEOUT + 30_000,
   );
@@ -78,13 +78,13 @@ describe("M2: Pi SDK runtime integration (real SDK + real model)", () => {
       // Force an explicit untrusted decision for this exact path (overrides
       // the trusted inheritance from the repo root).
       new ProjectTrustStore(getAgentDir()).set(project.dir, false);
-      const runtime = new PiRuntime({ cwd: project.dir, logger });
+      const runtime = new PiSdkHost({ cwd: project.dir, logger });
       runtimes.push(runtime);
 
       try {
         await runtime.start();
         // Lazy: no session yet, but trust is reported directly from the store.
-        expect(runtime.getStatus().trust).toBe(false);
+        expect(runtime.getStatus().configuredTrust).toBe(false);
       } finally {
         // Restore the inherited trust state so later runs behave the same.
         new ProjectTrustStore(getAgentDir()).set(project.dir, null);
@@ -97,7 +97,7 @@ describe("M2: Pi SDK runtime integration (real SDK + real model)", () => {
     "keeps project extension tools after newSession (session replacement + rebind)",
     async () => {
       project = createTmpProject("m2-new-session");
-      const runtime = new PiRuntime({ cwd: project.dir, logger });
+      const runtime = new PiSdkHost({ cwd: project.dir, logger });
       runtimes.push(runtime);
 
       await runtime.start();

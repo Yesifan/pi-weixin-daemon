@@ -1,4 +1,4 @@
-import type { InboundMessage, TurnContext } from "./types.js";
+import type { InboundMessage, TurnContext } from "../weixin/types.js";
 
 /** Convert an inbound message into the reply origin (TurnContext) for it. */
 export function toTurnContext(msg: InboundMessage): TurnContext {

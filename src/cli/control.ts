@@ -1,18 +1,9 @@
 import { execFile } from "node:child_process";
 import { Command } from "commander";
+import { piSdkVersion } from "../pi/sdk-info.js";
 import { VERSION } from "../version.js";
 
 const SERVICE_NAME = "pi-weixin-daemon";
-
-/** Resolve the bundled pi-coding-agent SDK version (best-effort). */
-async function piSdkVersion(): Promise<string> {
-  try {
-    const sdk = await import("@earendil-works/pi-coding-agent");
-    return sdk.VERSION ?? "?";
-  } catch {
-    return "?";
-  }
-}
 
 /** Run a systemctl/journalctl command and stream stdout to the console. */
 function run(cmd: string, args: string[], opts: { passthrough?: boolean } = {}): void {
@@ -53,7 +44,7 @@ export function statusCommand(): Command {
   return new Command("status")
     .description("Show versions and systemd --user status")
     .action(async () => {
-      const piSdk = await piSdkVersion();
+      const piSdk = piSdkVersion();
       console.log(`pi ${piSdk} · pi-wx ${VERSION}\n`);
       run("systemctl", ["--user", "--no-pager", "status", SERVICE_NAME], { passthrough: true });
     });

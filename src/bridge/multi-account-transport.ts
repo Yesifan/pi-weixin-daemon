@@ -1,4 +1,4 @@
-import type { InboundMessage, TurnContext, WeixinTransport } from "./types.js";
+import type { InboundMessage, TurnContext, WeixinTransport } from "../weixin/types.js";
 
 /**
  * Routes outbound calls to the transport owning the TurnContext's account.

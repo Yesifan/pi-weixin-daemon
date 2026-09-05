@@ -1,4 +1,4 @@
-import type { InboundMessage, TurnContext, WeixinTransport } from "../../src/bridge/types.js";
+import type { InboundMessage, TurnContext, WeixinTransport } from "../../src/weixin/types.js";
 
 /** In-memory WeixinTransport recording every outbound call; can emit inbound messages. */
 export class FakeWeixinTransport implements WeixinTransport {

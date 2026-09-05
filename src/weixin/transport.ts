@@ -1,5 +1,5 @@
 import type { Logger } from "../util/logger.js";
-import type { InboundMessage, TurnContext, WeixinTransport } from "../bridge/types.js";
+import type { InboundMessage, TurnContext, WeixinTransport } from "./types.js";
 import { getConfig, notifyStart, notifyStop, sendTyping as sendTypingApi } from "./api/api.js";
 import { WeixinConfigManager } from "./api/config-cache.js";
 import { TypingStatus, type WeixinMessage } from "./api/types.js";
@@ -46,7 +46,7 @@ export interface WeixinTransportOptions {
  * WeixinTransport facade for one account: owns the long-poll monitor, message
  * normalization, outbound text/file sending and the typing indicator.
  *
- * The agent layer only ever sees InboundMessage/TurnContext (bridge/types).
+ * The agent layer only ever sees InboundMessage/TurnContext (weixin/types).
  */
 export class ILinkWeixinTransport implements WeixinTransport {
   private readonly baseUrl: string;

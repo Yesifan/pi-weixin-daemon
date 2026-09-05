@@ -1,4 +1,4 @@
-import type { InboundAttachment, InboundMessage, MediaFailure } from "../bridge/types.js";
+import type { InboundAttachment, InboundMessage, MediaFailure } from "./types.js";
 import type { MessageItem, WeixinMessage } from "./api/types.js";
 import { MessageItemType, MessageType } from "./api/types.js";
 import { generateId } from "./util/random.js";

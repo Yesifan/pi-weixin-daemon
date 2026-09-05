@@ -1,12 +1,18 @@
 import fs from "node:fs";
-import type { ImageContent } from "@earendil-works/pi-ai/compat";
-import type { AgentRuntime } from "../agent/runtime.js";
+import type { InteractionPort } from "../pi/ports.js";
+import type { HostImage, HostPromptInput } from "../pi/types.js";
+import type { SessionRuntimePort } from "../sessions/runtime-port.js";
+import { CurrentTurn, toTurnContext } from "../sessions/turn-context.js";
 import type { Logger } from "../util/logger.js";
+import type {
+  InboundAttachment,
+  InboundMessage,
+  TurnContext,
+  WeixinTransport,
+} from "../weixin/types.js";
 import { CommandRouter } from "./commands.js";
 import { ResponseAccumulator } from "./response.js";
 import { BUSY_REPLY, type BridgeState } from "./state.js";
-import { CurrentTurn, toTurnContext } from "./turn-context.js";
-import type { InboundAttachment, InboundMessage, TurnContext, UiResponseBroker, WeixinTransport } from "./types.js";
 
 interface UiWaiter {
   accountId: string;
@@ -15,7 +21,7 @@ interface UiWaiter {
 }
 export interface BridgeDeps {
   /** Bound after runtime creation via bindRuntime(). */
-  runtime?: AgentRuntime;
+  runtime?: SessionRuntimePort;
   transport: WeixinTransport;
   logger: Logger;
   /** Human label for an inbound sender (used in "-- from weixin <name>"). Optional. */
@@ -32,8 +38,8 @@ export interface BridgeDeps {
  * - commands route through CommandRouter in every state
  * - replies (text/files/UI) always go back to the TurnContext origin account
  */
-export class Bridge implements UiResponseBroker {
-  private runtime: AgentRuntime | undefined;
+export class Bridge implements InteractionPort {
+  private runtime: SessionRuntimePort | undefined;
   private state: BridgeState = "IDLE";
   private currentTurn = new CurrentTurn();
   private turnPromise: Promise<void> | undefined;
@@ -50,7 +56,7 @@ export class Bridge implements UiResponseBroker {
     });
   }
 
-  bindRuntime(runtime: AgentRuntime): void {
+  bindRuntime(runtime: SessionRuntimePort): void {
     this.runtime = runtime;
   }
 
@@ -96,7 +102,7 @@ export class Bridge implements UiResponseBroker {
       const turn = this.currentTurn.get();
       if (turn && msg.accountId === turn.accountId && msg.senderId === turn.senderId) {
         log.info({ accountId: msg.accountId }, "UI response received");
-        this.resolveUiWaiter(msg.accountId, msg.text ?? "");
+        this.tryResolveUi(turn, msg.text ?? "");
       } else {
         log.info({ accountId: msg.accountId, senderId: msg.senderId }, "busy refusal (ui)");
         await this.deps.transport.sendText(toTurnContext(msg), BUSY_REPLY);
@@ -135,7 +141,7 @@ export class Bridge implements UiResponseBroker {
 
       let finalText: string;
       try {
-        await runtime.prompt(buildPromptText(msg, this.deps.resolveSenderLabel?.(msg)), imagesOf(msg, log));
+        await runtime.prompt(buildPromptInput(msg, this.deps.resolveSenderLabel?.(msg)));
         // agent_settled may arrive just after prompt() resolves; wait for it.
         await accumulator.settled;
         finalText = accumulator.accumulatedText.trim();
@@ -165,7 +171,7 @@ export class Bridge implements UiResponseBroker {
     }
   }
 
-  // --- UiResponseBroker ------------------------------------------------------
+  // --- InteractionPort -------------------------------------------------------
 
   beginUiInteraction(): void {
     this.state = "WAITING_FOR_UI";
@@ -175,6 +181,17 @@ export class Bridge implements UiResponseBroker {
     if (this.state === "WAITING_FOR_UI") {
       this.state = "RUNNING";
     }
+  }
+
+  isUiInteractionActive(): boolean {
+    return this.state === "WAITING_FOR_UI";
+  }
+
+  tryResolveUi(turn: TurnContext, text: string): boolean {
+    const waiter = this.uiWaiters.find((w) => w.accountId === turn.accountId);
+    if (!waiter) return false;
+    waiter.resolve(text);
+    return true;
   }
 
   waitForResponse(
@@ -214,11 +231,8 @@ export class Bridge implements UiResponseBroker {
     }
   }
 
-  private resolveUiWaiter(accountId: string, text: string): void {
-    const waiter = this.uiWaiters.find((w) => w.accountId === accountId);
-    if (waiter) {
-      waiter.resolve(text);
-    }
+  sendText(turn: TurnContext, text: string): Promise<void> {
+    return this.deps.transport.sendText(turn, text);
   }
 
   private formatStatus(): string {
@@ -230,11 +244,11 @@ export class Bridge implements UiResponseBroker {
       `Agent state: ${this.state}`,
       `Model: ${status?.model ?? "unknown"}`,
       `Thinking: ${status?.thinkingLevel ?? "unknown"}`,
-      `Trusted: ${status?.trust ?? "?"}`,
+      `Trusted: ${status?.configuredTrust ?? "?"}`,
     ].join("\n");
   }
 
-  private requireRuntime(): AgentRuntime {
+  private requireRuntime(): SessionRuntimePort {
     if (!this.runtime) throw new Error("Bridge runtime not bound");
     return this.runtime;
   }
@@ -268,14 +282,14 @@ function contextNote(a: InboundAttachment): string {
 }
 
 /**
- * Build the prompt text: message text + context notes for non-image attachments
- * (files/videos/voice; images go as true multimodal input) + any failed media
- * note, and an optional "-- from weixin <name>" sender marker.
+ * Build the domain prompt input: message text + context notes for non-image
+ * attachments (files/videos/voice; images go as true multimodal input) + any
+ * failed media note, and an optional "-- from weixin <name>" sender marker.
  */
-function buildPromptText(msg: InboundMessage, senderLabel?: string): string {
+function buildPromptInput(msg: InboundMessage, senderLabel?: string): HostPromptInput {
   const parts: string[] = [msg.text ?? ""];
   for (const a of msg.attachments) {
-    if (a.kind === "image") continue; // passed as ImageContent
+    if (a.kind === "image") continue; // passed as images
     parts.push(contextNote(a));
   }
   for (const f of msg.mediaFailures ?? []) {
@@ -286,24 +300,23 @@ function buildPromptText(msg: InboundMessage, senderLabel?: string): string {
     parts.push("");
     parts.push(`-- from weixin ${senderLabel}`);
   }
-  return parts.join("\n");
+  return { text: parts.join("\n"), images: imagesOf(msg) };
 }
 
-/** Weixin images -> true multimodal ImageContent[] (base64 + detected mime). */
-function imagesOf(msg: InboundMessage, log: Logger): ImageContent[] | undefined {
+/** Weixin images -> true multimodal domain images (base64 + detected mime). */
+function imagesOf(msg: InboundMessage): HostImage[] | undefined {
   const images = msg.attachments.filter((a) => a.kind === "image");
   if (images.length === 0) return undefined;
-  const contents: ImageContent[] = [];
+  const contents: HostImage[] = [];
   for (const img of images) {
     try {
       const buf = fs.readFileSync(img.localPath);
       contents.push({
-        type: "image",
         data: buf.toString("base64"),
         mimeType: img.mimeType ?? "image/jpeg",
       });
-    } catch (err) {
-      log.warn({ err, path: img.localPath }, "failed to read inbound image");
+    } catch {
+      // Skip unreadable images; the prompt text still flows.
     }
   }
   return contents.length > 0 ? contents : undefined;

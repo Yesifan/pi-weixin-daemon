@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "node:fs";
-import { PiRuntime } from "../../src/agent/runtime.js";
-import { WeixinUIContext } from "../../src/agent/ui-context.js";
+import { PiSdkHost } from "../../src/pi/sdk-host.js";
+import { WeixinUIContext } from "../../src/pi/ui-context.js";
 import { Bridge } from "../../src/bridge/router.js";
 import { MultiAccountTransport } from "../../src/bridge/multi-account-transport.js";
 import { createLogger } from "../../src/util/logger.js";
@@ -12,7 +12,7 @@ const logger = createLogger({ level: "warn" });
 const TIMEOUT = 120_000;
 
 describe("M9 e2e: extension UI dialogs completed over weixin (real SDK)", () => {
-  const runtimes: PiRuntime[] = [];
+  const runtimes: PiSdkHost[] = [];
 
   afterEach(async () => {
     for (const r of runtimes.splice(0)) {
@@ -27,13 +27,11 @@ describe("M9 e2e: extension UI dialogs completed over weixin (real SDK)", () => 
     multi.register("acct-a", transport);
 
     const bridge = new Bridge({ transport: multi, logger });
-    const runtime = new PiRuntime({
+    const runtime = new PiSdkHost({
       cwd: project.dir,
       logger,
       uiContext: new WeixinUIContext({
-        broker: bridge,
-        transport: multi,
-        getCurrentTurn: () => bridge.getCurrentTurn(),
+        interaction: bridge,
         logger,
       }),
     });

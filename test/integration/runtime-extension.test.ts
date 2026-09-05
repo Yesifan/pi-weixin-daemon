@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { PiRuntime } from "../../src/agent/runtime.js";
-import { createWeixinRuntimeExtension } from "../../src/agent/runtime-extension.js";
+import { PiSdkHost } from "../../src/pi/sdk-host.js";
+import { createWeixinSendFileExtension } from "../../src/pi/extensions/weixin-send-file.js";
 import { createLogger } from "../../src/util/logger.js";
 import { createTmpProject, waitForMarker } from "../helpers/tmp-project.js";
 import { FakeWeixinTransport, makeTurn } from "../helpers/fake-transport.js";
@@ -11,7 +11,7 @@ const logger = createLogger({ level: "warn" });
 const TIMEOUT = 120_000;
 
 describe("M3: daemon runtime weixin extension (real SDK)", () => {
-  const runtimes: PiRuntime[] = [];
+  const runtimes: PiSdkHost[] = [];
 
   afterEach(async () => {
     for (const r of runtimes.splice(0)) {
@@ -21,12 +21,12 @@ describe("M3: daemon runtime weixin extension (real SDK)", () => {
 
   async function makeRuntime(projectDir: string, transport: FakeWeixinTransport) {
     const currentTurn = makeTurn();
-    const runtime = new PiRuntime({
+    const runtime = new PiSdkHost({
       cwd: projectDir,
       logger,
       extensionFactories: [
-        createWeixinRuntimeExtension({
-          transport,
+        createWeixinSendFileExtension({
+          fileSender: { sendFile: (turn, p, caption) => transport.sendFile(turn, p, caption) },
           getCurrentTurn: () => currentTurn,
           cwd: projectDir,
           tmpDir: path.join(projectDir, ".pi-weixin", "tmp"),
@@ -49,15 +49,15 @@ describe("M3: daemon runtime weixin extension (real SDK)", () => {
       const { runtime } = await makeRuntime(project.dir, transport);
 
       // 1) Project extension still works alongside the runtime extension.
-      await runtime.prompt(
-        "请调用 mark_test_tool 工具，参数 input 的值为 coex111。只调用这个工具。",
-      );
+      await runtime.prompt({
+        text: "请调用 mark_test_tool 工具，参数 input 的值为 coex111。只调用这个工具。",
+      });
       await waitForMarker(project.markerFile, TIMEOUT);
 
       // 2) Agent uses weixin_send_file with a cwd-relative path.
-      await runtime.prompt(
-        '请调用 weixin_send_file 工具发送文件 report.txt，caption 为 "hello caption"。只调用这个工具。',
-      );
+      await runtime.prompt({
+        text: '请调用 weixin_send_file 工具发送文件 report.txt，caption 为 "hello caption"。只调用这个工具。',
+      });
 
       expect(transport.sentFiles.length).toBeGreaterThan(0);
       const sent = transport.sentFiles.at(-1)!;
@@ -79,9 +79,9 @@ describe("M3: daemon runtime weixin extension (real SDK)", () => {
 
       await runtime.newSession();
 
-      await runtime.prompt(
-        "请调用 weixin_send_file 工具发送文件 data.csv。只调用这个工具。",
-      );
+      await runtime.prompt({
+        text: "请调用 weixin_send_file 工具发送文件 data.csv。只调用这个工具。",
+      });
       expect(transport.sentFiles.length).toBeGreaterThan(0);
       expect(transport.sentFiles.at(-1)!.path).toBe(path.join(project.dir, "data.csv"));
     },

@@ -1,5 +1,4 @@
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { extractTextDelta, isAgentSettled } from "../agent/events.js";
+import { isAgentSettled, isTextDelta, type PiHostEvent } from "../pi/events.js";
 
 /**
  * Accumulates assistant text deltas for one turn and resolves when the agent
@@ -17,10 +16,9 @@ export class ResponseAccumulator {
     });
   }
 
-  handleEvent(event: AgentSessionEvent): void {
-    const delta = extractTextDelta(event);
-    if (delta) {
-      this.text += delta;
+  handleEvent(event: PiHostEvent): void {
+    if (isTextDelta(event)) {
+      this.text += event.delta;
     }
     if (isAgentSettled(event)) {
       this.settledResolve();

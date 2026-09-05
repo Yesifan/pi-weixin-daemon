@@ -1,12 +1,11 @@
-import type { AgentRuntime } from "../agent/runtime.js";
+import type { InteractionPort } from "../pi/ports.js";
+import type { SessionRuntimePort } from "../sessions/runtime-port.js";
 import { parseCommand } from "../bridge/commands.js";
 import { Bridge } from "../bridge/router.js";
 import type {
   InboundMessage,
-  TurnContext,
-  UiResponseBroker,
   WeixinTransport,
-} from "../bridge/types.js";
+} from "../weixin/types.js";
 import type { Logger } from "../util/logger.js";
 import type { ProjectRuntimeState } from "./types.js";
 
@@ -25,16 +24,16 @@ function participantKey(accountId: string, senderId: string): string {
   return `${accountId}:${senderId}`;
 }
 
-/** Factory builds the per-project agent runtime (real PiRuntime, or a fake in tests). */
+/** Factory builds the per-project agent runtime (real PiSdkHost, or a fake in tests). */
 export interface ProjectRuntimeFactoryContext {
   projectId: string;
   cwd: string;
   accounts: string[];
   transport: WeixinTransport;
-  bridge: UiResponseBroker & { getCurrentTurn(): TurnContext | undefined };
+  interaction: InteractionPort;
   logger: Logger;
 }
-export type ProjectRuntimeFactory = (ctx: ProjectRuntimeFactoryContext) => Promise<AgentRuntime>;
+export type ProjectRuntimeFactory = (ctx: ProjectRuntimeFactoryContext) => Promise<SessionRuntimePort>;
 
 export interface ProjectRuntimeOptions {
   projectId: string;
@@ -73,7 +72,7 @@ export class ProjectRuntime {
   state: ProjectRuntimeState | "off" = "starting";
   error?: string;
 
-  private runtime?: AgentRuntime;
+  private runtime?: SessionRuntimePort;
   private bridge?: Bridge;
 
   /** Registered project senders (real senderId, not account.userId). */
@@ -106,7 +105,7 @@ export class ProjectRuntime {
         cwd: this.cwd,
         accounts: this.accounts,
         transport: this.opts.transport,
-        bridge: this.bridge,
+        interaction: this.bridge,
         logger: this.opts.logger,
       });
       await this.runtime.start();
@@ -121,9 +120,6 @@ export class ProjectRuntime {
       this.opts.logger.error({ err, project: this.projectId }, "project runtime start failed");
       throw err;
     } finally {
-      // Release any message that arrived while start() was still binding
-      // extensions / dispatching session_start (pi-web waits for extensions
-      // bound before serving a prompt; see waitUntilReady in rpc-manager).
       this.resolveStarted();
     }
   }
@@ -137,8 +133,7 @@ export class ProjectRuntime {
 
     // ① Wait until the runtime finished starting (extensions bound, session_start
     //    dispatched) so the first tool call is gated against the fully-configured
-    //    project scope, not an init/global-only state (mirrors pi-web's
-    //    waitUntilReady before serving a prompt).
+    //    project scope, not an init/global-only state.
     await this.started;
 
     // ① A session was auto-closed while idle: start a fresh one on next message.
@@ -217,7 +212,7 @@ export class ProjectRuntime {
       sessionFile: s?.sessionFile,
       sessionId: s?.sessionId,
       model: s?.model,
-      trust: s?.trust,
+      trust: s?.configuredTrust,
       error: this.error,
     };
   }

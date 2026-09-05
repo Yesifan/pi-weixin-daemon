@@ -1,4 +1,4 @@
-import type { InboundMessage, TurnContext, WeixinTransport } from "../bridge/types.js";
+import type { InboundMessage, TurnContext, WeixinTransport } from "../weixin/types.js";
 
 /**
  * Per-project outbound facade. Routes every outbound call to the per-account

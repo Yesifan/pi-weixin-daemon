@@ -7,7 +7,7 @@ import { registerWeixinAccountId, saveWeixinAccount } from "../../src/weixin/aut
 import { createLogger } from "../../src/util/logger.js";
 import { FakeWeixinTransport } from "../helpers/fake-transport.js";
 import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
-import type { InboundMessage } from "../../src/bridge/types.js";
+import type { InboundMessage } from "../../src/weixin/types.js";
 
 const logger = createLogger({ level: "silent" });
 const OLD_DATA = process.env.PI_WEIXIN_DATA_DIR;

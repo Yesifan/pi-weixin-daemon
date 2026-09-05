@@ -57,24 +57,3 @@ export interface WeixinTransport {
   /** Subscribe to inbound DM messages. Returns an unsubscribe function. */
   onMessage(handler: (message: InboundMessage) => Promise<void>): () => void;
 }
-
-/**
- * Bridges extension UI dialog promises (confirm/select/input) to the weixin
- * message stream. Implemented by the Bridge; consumed by WeixinUIContext.
- */
-export interface UiResponseBroker {
-  /** Called before showing a dialog: bridge state -> WAITING_FOR_UI. */
-  beginUiInteraction(): void;
-  /** Called when the dialog resolves: bridge state -> RUNNING. */
-  endUiInteraction(): void;
-  /**
-   * Resolve with the next ordinary message from the turn account.
-   * Rejects on /abort (cancelUiWaiters) or timeout/signal.
-   */
-  waitForResponse(
-    turn: TurnContext,
-    opts?: { timeoutMs?: number; signal?: AbortSignal },
-  ): Promise<string>;
-  /** Reject all pending dialogs (e.g. on /abort or turn teardown). */
-  cancelUiWaiters(reason: string): void;
-}

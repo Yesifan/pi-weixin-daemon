@@ -1,12 +1,10 @@
-import type { ExtensionUIContext, ExtensionUIDialogOptions, Theme } from "@earendil-works/pi-coding-agent";
+import { Theme, type ExtensionUIContext, type ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 import type { Logger } from "../util/logger.js";
-import type { TurnContext, UiResponseBroker, WeixinTransport } from "../bridge/types.js";
+import type { InteractionPort } from "./ports.js";
 
 export interface WeixinUIContextDeps {
   /** Bridges the dialog promise to the weixin message stream + busy state. */
-  broker: UiResponseBroker;
-  transport: Pick<WeixinTransport, "sendText">;
-  getCurrentTurn: () => TurnContext | undefined;
+  interaction: InteractionPort;
   logger: Logger;
 }
 
@@ -64,29 +62,32 @@ function isUiTimeoutError(err: unknown): boolean {
 }
 
 /**
- * ExtensionUIContext implemented over weixin DMs.
+ * ExtensionUIContext implemented over weixin DMs (ADR-0003 D-E).
  *
  * - confirm/select/input: send the dialog to the current turn's account,
- *   enter WAITING_FOR_UI, resolve with the user's next ordinary message.
+ *   enter UI-waiting, resolve with the user's next ordinary message.
  * - notify: fire-and-forget text message.
- * - All terminal/TUI primitives are no-ops (v0.1; editor etc. unsupported).
+ * - editor: degraded to the input dialog (prefill hint + next message).
+ * - custom: resolves undefined (never rejects) — unsupported over weixin.
+ * - All remaining terminal/TUI primitives are no-ops that never throw.
+ * - theme: real minimal `Theme` instance (never `{} as Theme`).
  */
 export class WeixinUIContext implements ExtensionUIContext {
   constructor(private readonly deps: WeixinUIContextDeps) {}
 
-  private requireTurn(): TurnContext {
-    const turn = this.deps.getCurrentTurn();
+  private requireTurn() {
+    const turn = this.deps.interaction.getCurrentTurn();
     if (!turn) throw new Error("no active turn for weixin UI interaction");
     return turn;
   }
 
   async confirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean> {
     const turn = this.requireTurn();
-    await this.deps.transport.sendText(
+    await this.deps.interaction.sendText(
       turn,
       `🔔 ${title}\n\n${message}\n\n请回复：\n1. 确认\n2. 取消`,
     );
-    this.deps.broker.beginUiInteraction();
+    this.deps.interaction.beginUiInteraction();
     let answer: string;
     try {
       answer = await this.waitForUiAnswer(turn, opts);
@@ -99,7 +100,7 @@ export class WeixinUIContext implements ExtensionUIContext {
       }
       throw err;
     } finally {
-      this.deps.broker.endUiInteraction();
+      this.deps.interaction.endUiInteraction();
     }
     const confirmed = parseConfirm(answer);
     await this.ack(turn, confirmed ? "✅ 已确认。" : "❌ 已取消。");
@@ -109,8 +110,8 @@ export class WeixinUIContext implements ExtensionUIContext {
   async select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined> {
     const turn = this.requireTurn();
     const list = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
-    await this.deps.transport.sendText(turn, `🔔 ${title}\n\n${list}\n\n请回复选项编号或内容。`);
-    this.deps.broker.beginUiInteraction();
+    await this.deps.interaction.sendText(turn, `🔔 ${title}\n\n${list}\n\n请回复选项编号或内容。`);
+    this.deps.interaction.beginUiInteraction();
     let answer: string;
     try {
       answer = await this.waitForUiAnswer(turn, opts);
@@ -122,7 +123,7 @@ export class WeixinUIContext implements ExtensionUIContext {
       }
       throw err;
     } finally {
-      this.deps.broker.endUiInteraction();
+      this.deps.interaction.endUiInteraction();
     }
     const selected = parseSelect(answer, options);
     await this.ack(turn, describeSelectResult(selected, answer));
@@ -132,8 +133,8 @@ export class WeixinUIContext implements ExtensionUIContext {
   async input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined> {
     const turn = this.requireTurn();
     const hint = placeholder ? `\n\n（例如：${placeholder}）` : "";
-    await this.deps.transport.sendText(turn, `⌨️ ${title}${hint}\n\n请直接回复内容。`);
-    this.deps.broker.beginUiInteraction();
+    await this.deps.interaction.sendText(turn, `⌨️ ${title}${hint}\n\n请直接回复内容。`);
+    this.deps.interaction.beginUiInteraction();
     let answer: string;
     try {
       answer = await this.waitForUiAnswer(turn, opts);
@@ -144,42 +145,41 @@ export class WeixinUIContext implements ExtensionUIContext {
       }
       throw err;
     } finally {
-      this.deps.broker.endUiInteraction();
+      this.deps.interaction.endUiInteraction();
     }
     await this.ack(turn, `✅ 已收到：${answer}`);
     return answer;
   }
 
   /**
-   * Apply the effective timeout before handing control to the broker. The SDK's
-   * `ExtensionUIDialogOptions.timeout` (ms) is the caller's value; when absent we
-   * fall back to {@link DEFAULT_UI_TIMEOUT_MS}. Maps onto the broker's
-   * `{ timeoutMs, signal }` shape, which is what actually enforces the deadline.
+   * Apply the effective timeout before handing control to the interaction port.
+   * The SDK's `ExtensionUIDialogOptions.timeout` (ms) is the caller's value; when
+   * absent we fall back to {@link DEFAULT_UI_TIMEOUT_MS}.
    */
-  private async waitForUiAnswer(turn: TurnContext, opts?: ExtensionUIDialogOptions): Promise<string> {
+  private async waitForUiAnswer(turn: Parameters<InteractionPort["waitForResponse"]>[0], opts?: ExtensionUIDialogOptions): Promise<string> {
     const timeoutMs = opts?.timeout ?? DEFAULT_UI_TIMEOUT_MS;
-    return this.deps.broker.waitForResponse(turn, { timeoutMs, signal: opts?.signal });
+    return this.deps.interaction.waitForResponse(turn, { timeoutMs, signal: opts?.signal });
   }
 
   /** Best-effort ack message to the user; a failed ack never breaks the dialog. */
-  private async ack(turn: TurnContext, text: string): Promise<void> {
+  private async ack(turn: Parameters<InteractionPort["sendText"]>[0], text: string): Promise<void> {
     try {
-      await this.deps.transport.sendText(turn, text);
+      await this.deps.interaction.sendText(turn, text);
     } catch (err) {
       this.deps.logger.warn({ err }, "ui ack send failed");
     }
   }
 
   notify(message: string, type?: "info" | "warning" | "error"): void {
-    const turn = this.deps.getCurrentTurn();
+    const turn = this.deps.interaction.getCurrentTurn();
     if (!turn) return;
     const icon = type === "error" ? "❌" : type === "warning" ? "⚠️" : "ℹ️";
-    void this.deps.transport
+    void this.deps.interaction
       .sendText(turn, `${icon} ${message}`)
       .catch((err: unknown) => this.deps.logger.warn({ err }, "notify send failed"));
   }
 
-  // --- TUI-only primitives: no-ops in v0.1 (weixin has no terminal UI) ---
+  // --- TUI-only primitives: no-ops over weixin (never throw) ---
   // Parameters use loose types on purpose: these are inert stubs for an
   // interface whose TUI types are not exported from the SDK root.
 
@@ -195,23 +195,29 @@ export class WeixinUIContext implements ExtensionUIContext {
   setFooter(_factory: never): void {}
   setHeader(_factory: never): void {}
   setTitle(_title: string): void {}
+
+  /** Unsupported over weixin: resolve undefined (never reject), per D-E. */
   custom<T>(_factory: never, _options?: never): Promise<T> {
-    return Promise.reject(new Error("custom UI is not supported by the weixin UI context"));
+    return Promise.resolve(undefined as T);
   }
+
   pasteToEditor(_text: string): void {}
   setEditorText(_text: string): void {}
   getEditorText(): string {
     return "";
   }
-  editor(_title: string, _prefill?: string): Promise<string | undefined> {
-    return Promise.reject(new Error("editor is not supported by the weixin UI context (v0.1)"));
+
+  /** Degraded editor: same as the input dialog (prefill hint + next message). */
+  editor(title: string, prefill?: string): Promise<string | undefined> {
+    return this.input(title, prefill);
   }
+
   addAutocompleteProvider(_factory: never): void {}
   setEditorComponent(_factory: never): void {}
   getEditorComponent(): never {
     return undefined as never;
   }
-  readonly theme = {} as Theme;
+  readonly theme = createMinimalTheme();
   getAllThemes(): { name: string; path: string | undefined }[] {
     return [];
   }
@@ -225,4 +231,73 @@ export class WeixinUIContext implements ExtensionUIContext {
     return false;
   }
   setToolsExpanded(_expanded: boolean): void {}
+}
+
+// A real `Theme` instance with all-reset colors: valid, styleable no-op theme.
+// Never `{} as Theme` (D-E: extensions may safely read `ctx.ui.theme`).
+type ThemeCtor = ConstructorParameters<typeof Theme>;
+
+const MINIMAL_FG: ThemeCtor[0] = {
+  accent: "",
+  border: "",
+  borderAccent: "",
+  borderMuted: "",
+  success: "",
+  error: "",
+  warning: "",
+  muted: "",
+  dim: "",
+  text: "",
+  thinkingText: "",
+  userMessageText: "",
+  customMessageText: "",
+  customMessageLabel: "",
+  toolTitle: "",
+  toolOutput: "",
+  mdHeading: "",
+  mdLink: "",
+  mdLinkUrl: "",
+  mdCode: "",
+  mdCodeBlock: "",
+  mdCodeBlockBorder: "",
+  mdQuote: "",
+  mdQuoteBorder: "",
+  mdHr: "",
+  mdListBullet: "",
+  toolDiffAdded: "",
+  toolDiffRemoved: "",
+  toolDiffContext: "",
+  syntaxComment: "",
+  syntaxKeyword: "",
+  syntaxFunction: "",
+  syntaxVariable: "",
+  syntaxString: "",
+  syntaxNumber: "",
+  syntaxType: "",
+  syntaxOperator: "",
+  syntaxPunctuation: "",
+  thinkingOff: "",
+  thinkingMinimal: "",
+  thinkingLow: "",
+  thinkingMedium: "",
+  thinkingHigh: "",
+  thinkingXhigh: "",
+  bashMode: "",
+};
+
+const MINIMAL_BG: ThemeCtor[1] = {
+  selectedBg: "",
+  userMessageBg: "",
+  customMessageBg: "",
+  toolPendingBg: "",
+  toolSuccessBg: "",
+  toolErrorBg: "",
+};
+
+let minimalTheme: Theme | undefined;
+function createMinimalTheme(): Theme {
+  if (!minimalTheme) {
+    minimalTheme = new Theme(MINIMAL_FG, MINIMAL_BG, "truecolor", { name: "pi-wx" });
+  }
+  return minimalTheme;
 }

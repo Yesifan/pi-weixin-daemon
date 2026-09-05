@@ -1,7 +1,7 @@
-import type { AgentRuntime } from "../agent/runtime.js";
+import type { SessionSwitchResult } from "../pi/types.js";
 import type { Logger } from "../util/logger.js";
+import type { InboundMessage } from "../weixin/types.js";
 import type { BridgeState } from "./state.js";
-import type { InboundMessage } from "./types.js";
 
 /** Parse a command like "/status" or "/new" from message text. */
 export function parseCommand(
@@ -24,11 +24,11 @@ function helpText(): string {
   ].join("\n");
 }
 
-/** Runtime surface needed by commands (satisfied by AgentRuntime). */
+/** Runtime surface needed by commands (satisfied by SessionRuntimePort). */
 export interface CommandRuntime {
   hasSession(): boolean;
   abort(): Promise<void>;
-  newSession(): Promise<void>;
+  newSession(): Promise<SessionSwitchResult>;
   compact(): Promise<void>;
 }
 

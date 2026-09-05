@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { z } from "zod";
+import { checkModelAvailability, isPiSdkAvailable, piSdkVersion } from "../pi/sdk-info.js";
 import { resolveStateDir } from "../weixin/storage/state-dir.js";
 import { listIndexedWeixinAccountIds, loadWeixinAccount, resolveWeixinBaseUrl } from "../weixin/auth/accounts.js";
 
@@ -56,11 +57,8 @@ export function doctorCommand(): Command {
       let sdkOk = false;
       let sdkDetail = "";
       try {
-        const sdk = await import("@earendil-works/pi-coding-agent");
-        sdkOk =
-          typeof sdk.createAgentSessionRuntime === "function" &&
-          typeof sdk.SessionManager === "function";
-        sdkDetail = `@earendil-works/pi-coding-agent@${sdk.VERSION ?? "?"}`;
+        sdkOk = isPiSdkAvailable();
+        sdkDetail = `@earendil-works/pi-coding-agent@${piSdkVersion()}`;
       } catch (err) {
         sdkDetail = String(err);
       }
@@ -77,23 +75,9 @@ export function doctorCommand(): Command {
           defaultProvider?: string;
           defaultModel?: string;
         };
-        const provider = settings.defaultProvider;
-        const model = settings.defaultModel;
-        if (!provider) {
-          modelDetail = "no defaultProvider in settings.json";
-        } else {
-          const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-          const mr = await ModelRuntime.create({ allowModelNetwork: false });
-          const available = (await mr.getAvailable()) as unknown as Array<{ provider?: string; id?: string }>;
-          const hasProvider = available.some((m) => m.provider === provider);
-          const hasModel = model
-            ? available.some((m) => m.provider === provider && m.id === model)
-            : hasProvider;
-          modelOk = hasModel;
-          modelDetail = hasModel
-            ? `${provider}/${model ?? "(any)"} available`
-            : `${provider}/${model ?? "(any)"} NOT available — no API key/credentials; see README "配置模型 API key"`;
-        }
+        const result = await checkModelAvailability(settings);
+        modelOk = result.ok;
+        modelDetail = result.detail;
       } catch (err) {
         modelDetail = `unable to resolve model: ${err instanceof Error ? err.message : String(err)}`;
       }

@@ -2,8 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 import { Bridge } from "../../src/bridge/router.js";
 import { MultiAccountTransport } from "../../src/bridge/multi-account-transport.js";
 import { BUSY_REPLY } from "../../src/bridge/state.js";
-import { WeixinUIContext } from "../../src/agent/ui-context.js";
-import type { TurnContext, UiResponseBroker } from "../../src/bridge/types.js";
+import { WeixinUIContext } from "../../src/pi/ui-context.js";
+import type { InteractionPort } from "../../src/pi/ports.js";
+import type { TurnContext } from "../../src/weixin/types.js";
 import { createLogger } from "../../src/util/logger.js";
 import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
 import { FakeWeixinTransport, makeInboundMessage, makeTurn } from "../helpers/fake-transport.js";
@@ -81,16 +82,36 @@ describe("M9 bridge UI response routing", () => {
 });
 
 describe("M9 WeixinUIContext dialogs", () => {
-  class FakeBroker implements UiResponseBroker {
+  class FakeInteraction implements InteractionPort {
     beginCount = 0;
     endCount = 0;
+    private turn: TurnContext | undefined;
+    private transport: FakeWeixinTransport;
     private waiters: Array<{ resolve: (t: string) => void; reject: (e: Error) => void; timer?: NodeJS.Timeout }> = [];
 
+    constructor(turn: TurnContext | undefined, transport: FakeWeixinTransport) {
+      this.turn = turn;
+      this.transport = transport;
+    }
+
+    getCurrentTurn(): TurnContext | undefined {
+      return this.turn;
+    }
     beginUiInteraction(): void {
       this.beginCount += 1;
     }
     endUiInteraction(): void {
       this.endCount += 1;
+    }
+    isUiInteractionActive(): boolean {
+      return this.waiters.length > 0;
+    }
+    tryResolveUi(_turn: TurnContext, text: string): boolean {
+      this.resolveWith(text);
+      return true;
+    }
+    sendText(turn: TurnContext, text: string): Promise<void> {
+      return this.transport.sendText(turn, text);
     }
     waitForResponse(_turn: TurnContext, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<string> {
       return new Promise((resolve, reject) => {
@@ -115,12 +136,10 @@ describe("M9 WeixinUIContext dialogs", () => {
 
   function setupUi() {
     const transport = new FakeWeixinTransport();
-    const broker = new FakeBroker();
     const turn = makeTurn("acct-a", "user-a");
+    const broker = new FakeInteraction(turn, transport);
     const ui = new WeixinUIContext({
-      broker,
-      transport,
-      getCurrentTurn: () => turn,
+      interaction: broker,
       logger,
     });
     return { transport, broker, ui, turn };
@@ -233,8 +252,8 @@ describe("M9 WeixinUIContext dialogs", () => {
 
   it("notify with no active turn is a no-op", () => {
     const transport = new FakeWeixinTransport();
-    const broker = new FakeBroker();
-    const ui = new WeixinUIContext({ broker, transport, getCurrentTurn: () => undefined, logger });
+    const broker = new FakeInteraction(undefined, transport);
+    const ui = new WeixinUIContext({ interaction: broker, logger });
     ui.notify("nobody home", "info");
     expect(transport.sentTexts).toHaveLength(0);
   });

@@ -1,17 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Type, type Static } from "typebox";
-import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { Logger } from "../util/logger.js";
-import { sanitizeFilename } from "../util/sanitize.js";
-import type { TurnContext, WeixinTransport } from "../bridge/types.js";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type { Logger } from "../../util/logger.js";
+import { sanitizeFilename } from "../../util/sanitize.js";
+import type { TurnContext } from "../../weixin/types.js";
+import type { FileSenderPort } from "../ports.js";
 
-export interface WeixinRuntimeExtensionDeps {
-  /** Per-account dispatch: the daemon routes to the transport owning the TurnContext's account. */
-  transport: Pick<WeixinTransport, "sendFile">;
-  /** Current turn origin (set by the bridge while an agent run is active). */
+export interface WeixinSendFileExtensionDeps {
+  /** Sends the file to the current turn origin (implemented by weixin layer). */
+  fileSender: FileSenderPort;
+  /** Current turn origin (set by the session controller while a run is active). */
   getCurrentTurn: () => TurnContext | undefined;
-  /** Project cwd; sendable files must live inside it (or tmpDir). */
+  /** Project cwd; relative tool paths resolve against it, sendable files live inside it. */
   cwd: string;
   /** Daemon-managed temp directory for outbound staging. */
   tmpDir: string;
@@ -34,6 +35,9 @@ export type PathValidationResult =
  *  - path must exist and be a regular file
  *  - filename is sanitized (control chars / path separators stripped)
  *  - the file must resolve inside the project cwd or the daemon tmp dir
+ *
+ * (Removed in phase 5 / W9: the path boundary goes away; the permission model
+ * becomes the agent process's own permissions.)
  */
 export function validateSendFileParams(filePath: string, cwd: string, tmpDir: string): PathValidationResult {
   const resolved = path.resolve(cwd, filePath);
@@ -74,8 +78,8 @@ export function validateSendFileParams(filePath: string, cwd: string, tmpDir: st
  * - never written to <cwd>/.pi/extensions (invisible to plain `pi` / PI WEB)
  * - reads the active TurnContext at call time; no account/user params from the agent
  */
-export function createWeixinRuntimeExtension(deps: WeixinRuntimeExtensionDeps): ExtensionFactory {
-  return (pi: ExtensionAPI) => {
+export function createWeixinSendFileExtension(deps: WeixinSendFileExtensionDeps): ExtensionFactory {
+  return (pi) => {
     pi.registerTool({
       name: "weixin_send_file",
       label: "Weixin Send File",
@@ -107,7 +111,7 @@ export function createWeixinRuntimeExtension(deps: WeixinRuntimeExtensionDeps): 
           { accountId: turn.accountId, file: validated.resolvedPath },
           "weixin_send_file",
         );
-        await deps.transport.sendFile(turn, validated.resolvedPath, params.caption);
+        await deps.fileSender.sendFile(turn, validated.resolvedPath, params.caption);
         return {
           content: [
             {

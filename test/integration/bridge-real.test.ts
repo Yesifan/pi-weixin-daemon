@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { PiRuntime } from "../../src/agent/runtime.js";
+import { PiSdkHost } from "../../src/pi/sdk-host.js";
 import { Bridge } from "../../src/bridge/router.js";
 import { MultiAccountTransport } from "../../src/bridge/multi-account-transport.js";
 import { createLogger } from "../../src/util/logger.js";
@@ -10,7 +10,7 @@ const logger = createLogger({ level: "warn" });
 const TIMEOUT = 120_000;
 
 describe("M6 e2e: weixin -> real Pi runtime -> weixin", () => {
-  const runtimes: PiRuntime[] = [];
+  const runtimes: PiSdkHost[] = [];
 
   afterEach(async () => {
     for (const r of runtimes.splice(0)) {
@@ -26,7 +26,7 @@ describe("M6 e2e: weixin -> real Pi runtime -> weixin", () => {
       const multi = new MultiAccountTransport();
       multi.register("acct-a", transportA);
 
-      const runtime = new PiRuntime({ cwd: project.dir, logger });
+      const runtime = new PiSdkHost({ cwd: project.dir, logger });
       runtimes.push(runtime);
       await runtime.start();
 

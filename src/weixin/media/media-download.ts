@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { Logger } from "../../util/logger.js";
 import { sanitizeDirName, sanitizeFilename } from "../../util/sanitize.js";
-import type { InboundAttachment, InboundAttachmentKind, MediaFailure } from "../../bridge/types.js";
+import type { InboundAttachment, InboundAttachmentKind, MediaFailure } from "../types.js";
 import type { MessageItem, WeixinMessage } from "../api/types.js";
 import { MessageItemType } from "../api/types.js";
 import { CDN_BASE_URL } from "../auth/accounts.js";

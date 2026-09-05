@@ -174,7 +174,8 @@ describe("M8 media routing through the bridge", () => {
     expect(runtime.prompts[0]?.text).toBe("看看这张图");
     const images = runtime.prompts[0]?.images;
     expect(images).toHaveLength(1);
-    expect(images?.[0]).toMatchObject({ type: "image", mimeType: "image/png" });
+    expect(images?.[0]).toMatchObject({ mimeType: "image/png" });
+    expect(images?.[0]?.data).toBeTruthy();
 
     runtime.complete("图片已收到");
     await turnPromise;
