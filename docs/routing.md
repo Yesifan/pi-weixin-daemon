@@ -49,7 +49,7 @@
   pi-weixin 长轮询(getupdates) 拿到消息A
         │   # 归一化成 InboundMessage{ accountId=bot, senderId=user }
         ▼
-  pi-weixin 投递到 项目 → ProjectRuntime → Bridge
+  pi-weixin 投递到 项目 → ProjectController → SessionController
         │   # 若加需求②：在文本末尾追加 "-- from weixin <账号name>"
         ▼
   pi agent 处理，生成回复消息B
@@ -62,7 +62,7 @@
 ```
 
 - **入站**：`getupdates` 长轮询 → 归一化 `InboundMessage` → 按 `accountId` 路由到项目 →
-  `Bridge.ingest`。
+  `SessionController.handleUserMessage`。
 - **出站**：回复使用 `TurnContext`（`accountId`/`senderId`/`context_token`）回传；
   `context_token` 必须原样回传。
 
@@ -102,7 +102,7 @@
   agent 的最终回复会**广播**给项目内**所有**参与者（含发起者）——需求④。
 - **消息互通**：某账号的 sender 发来消息时，同时通知同项目**其他**参与者，
   内容为 "`<该账号name>`: 消息文本"——需求③。
-- **目标来源**：广播 / 互通的目标取自 **参与者注册表**（`ProjectRuntime` 记录每个项目下
+- **目标来源**：广播 / 互通的目标取自 **参与者注册表**（`ProjectController` 记录每个项目下
   "实际发过消息的 `(accountId, senderId)` + `contextToken`"），不靠 `account.userId` 猜
   （避免 `ilink_user_id ≠ from_user_id` 出错）。
 - **限制**：没发过消息 / 无 token 的账号不会出现在注册表里，也就不会收到（已知取舍）。
@@ -114,7 +114,7 @@
 ## UI / 权限交互（ask）
 
 当 agent 需要交互时，会往**当前 turn 的账号**发一条 **ask**（确认 / 选择 / 输入），或者某个工具调用
-命中权限系统需要批准（也是一种 ask）。此时 bridge 进入 `WAITING_FOR_UI`，等用户的**下一条普通消息**
+命中权限系统需要批准（也是一种 ask）。此时 interaction controller 进入 `WAITING_FOR_UI`，等用户的**下一条普通消息**
 作为答复。
 
 - **答复路由**：只有**当前 turn 的发起者**（`(accountId, senderId)` 与 turn 一致）的普通消息才被当作答复；
@@ -149,5 +149,5 @@
 - 项目启动时**总新建**一个会话（不做跨重启恢复）；普通消息始终进这同一个会话。
 - 只有 `/new` 或 daemon 重启（均新建）会改变"当前会话"；
   空闲自动关闭也是新建（下一条消息时）。`/compact`、`/abort` 仍只作用于当前会话，不换会话。
-- 项目忙时（`RUNNING`），普通消息**直接拒绝、不排队**，不进会话；`WAITING_FOR_UI` 时只有
+- 项目忙时（`busy`），普通消息**直接拒绝、不排队**，不进会话；`WAITING_FOR_UI` 时只有
   当前 turn 发起者的消息作为答复，其余同样拒绝（见上方「UI / 权限交互」）。

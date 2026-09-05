@@ -14,7 +14,7 @@
                      │
               ProjectManager
         ┌────────────┴────────────┐
-      ProjectRuntime foo     ProjectRuntime bar
+     ProjectController foo   ProjectController bar
       │  cwd + Pi session      │  cwd + Pi session
       │  busy/abort 作用域       │  busy/abort 作用域
       │  weixin_send_file 注入   │  weixin_send_file 注入
@@ -25,7 +25,7 @@
 
 ## 特性
 
-- **一个 daemon = 多 project**：一次 `serve` 长期运行，一个 Project 绑定一个 Pi 会话（`ProjectRuntime`），按需启停（`project enable` / `disable`）。
+- **一个 daemon = 多 project**：一次 `serve` 长期运行，一个 Project 绑定一个 Pi 会话（`ProjectController`），按需启停（`project enable` / `disable`）。
 - **一个 account 只属于一个 project**：`account → project` 单向映射；一账号绑第二个 project 会报错。未绑定 / disabled 的账号消息直接丢弃，不进入 Pi。
 - **busy / abort 是 Project 作用域**：foo 忙、foo 被 abort、foo 出错都不影响 bar（严格故障隔离）。
 - **多微信账号**：一次扫码登录一个账号，可重复添加；每个账号独立 monitor，多个账号可绑定到同一 project。
@@ -171,11 +171,16 @@ daemon 通过 Pi SDK 运行模型，需要对应 provider 的凭据。若运行�
 | `/new`     | 新建会话                                      | 仅空闲   |
 | `/compact` | 压缩会话                                      | 仅空闲   |
 
+> 只有上面五个**显式映射的命令**进入微信 slash 处理；其它 `/xxx` 一律回复
+> 「未知命令，输入 /help 查看」，不进 Pi、也不当普通用户消息（Pi 的 extension
+> command / prompt template / skill 不经微信透传）。
+
 ## Agent 能力
 
-- **`weixin_send_file(path, caption?)`**：daemon 内存注入的工具（不写入项目 `.pi/extensions`，普通 `pi`/PI WEB 会话不可见）。自动发送到当前 Turn 的微信用户；仅允许 `cwd` 或 daemon 临时目录内的普通文件。
+- **`weixin_send_file(path, caption?)`**：daemon 内存注入的工具（不写入项目 `.pi/extensions`，普通 `pi`/PI WEB 会话不可见）。自动发送到当前 Turn 的微信用户；仅要求文件存在且为普通文件（文件名 sanitize），**不设路径边界**——权限模型 = agent 进程权限，与 bash/read/write 一致（可发 `cwd` 之外 agent 可读的文件）。
 - **入站媒体**：图片 → 多模态输入；文件/视频/语音 → 下载到 `<cwd>/.pi-weixin/inbox/<message-id>/` 并在 prompt 中说明路径。`.pi-weixin/` 会自动加入项目 `.gitignore`。
-- **Extension UI**：项目 extension 调用 `ctx.ui.confirm/select/input` 时，daemon 进入 `WAITING_FOR_UI`，通过微信与用户交互（其他账号仍 busy）；`ctx.ui.notify` 直接推送消息。TUI 专属能力（editor 等）v0.1 不实现。
+- **Extension UI**：项目 extension 调用 `ctx.ui.confirm/select/input` 时，daemon 进入 `WAITING_FOR_UI`，通过微信与用户交互（其他账号仍 busy）；`ctx.ui.notify` 直接推送消息。`ctx.ui.custom()` resolve undefined、`ctx.ui.editor()` 降级为输入框、`ctx.ui.theme` 返回真实最小 Theme 对象；其余 TUI 专属原语 no-op 不 throw。
+- **runner-level settings 不支持（W8）**：`resourceLoader` 层的项目配置正常生效；runner 级 settings（如 `sessionDir`）在 daemon 内不支持。
 
 ## 架构
 
@@ -186,13 +191,13 @@ Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attrib
    Weixin Transport / AccountManager   # src/weixin/ + src/accounts/（每账号 monitor，先门后下）
         │
         ▼
-   ProjectManager                      # src/projects/（Map<ProjectId, ProjectRuntime> + account→project 路由）
+   ProjectManager                      # src/projects/（desired → diff → restart；Map<ProjectId, ProjectController>）
         │
-        ├─ ProjectRuntime  →  Pi AgentSession SDK  →  项目 cwd
+        ├─ ProjectController  →  SessionController  →  PiSdkHost (src/pi/)  →  项目 cwd
         └─ UDS RPC（控制面）→  CLI project/service/control/login
 ```
 
-依赖方向：`weixin → accounts/projects → agent`。`agent/` 不依赖 iLink 类型；`weixin/` 不依赖 AgentSession；`daemon.ts` 做组合。
+依赖方向：`weixin → accounts/projects → sessions → pi`。**只有 `src/pi/` import Pi SDK**（含类型，eslint 强制）；业务层只见领域类型与 port；`daemon.ts` 做组合。
 
 ## 配置与存储（XDG）
 

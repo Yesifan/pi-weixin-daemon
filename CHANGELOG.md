@@ -7,6 +7,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.5.5]
+
+### Changed
+
+- **架构分层（Pi host 兼容性重构，五阶段）**：只留 `src/pi/` 直接 import Pi SDK
+  （含类型），对外只用领域类型；新增 `src/sessions/`（单一会话状态机）、
+  `src/projects/`（ProjectController + command-router + immutable snapshot）；
+  删除 `src/agent/` 与 `src/bridge/`。eslint `no-restricted-imports` 强制边界。
+- **诊断 fail-closed（W1）**：extension/settings 致命错误（`PiInitializationError`）
+  让该项目进入 error 态并拒消息，其它项目不受影响；`/status` 展示
+  `configuredTrust` 与 `activeSessionTrust` 双字段（W7）。
+- **idle 真关闭（W3）**：闲置到点后 dispose SDK runtime，下一条消息重建全新
+  session；`/new` 透传 `{cancelled}`，被 `session_before_switch` 取消时如实回复。
+- **微信 slash 语义（W4）**：只认 daemon 显式命令 `/help /status /abort /new
+  /compact`；未知 `/xxx` 回复「未知命令」，不进 Pi 也不当普通消息。
+
+### Added
+
+- **完整 `bindExtensions`（W5）**：`waitForIdle/newSession/fork/navigateTree/
+  switchSession/reload` 六动作绑定公开 API，挂在 rebind 路径。
+- **UI 降级契约（W6）**：`ctx.ui.custom()` resolve undefined、`editor()` 降级为
+  输入框、`theme` 返回真实最小 Theme 对象；其余 TUI 原语 no-op 不 throw。
+- **`weixin_send_file` 无路径边界（W9）**：仅 `exists + isFile + sanitizeFilename`；
+  权限模型 = agent 进程权限（与 bash/read/write 一致）。
+
+### Removed
+
+- **删除 `project set`**：`cwd` 创建后固定（CLI/RPC/daemon 全链路移除）；
+  `ProjectStore` 对已存在项目断言不改 cwd。accounts 变更 → runtime-key
+  （`sorted(accounts)`）变化 → restart。
+- 删除 `sessionExpired`（由单一状态机 `inactive/ready/busy/replacing/faulted` 取代）。
+
+---
+
 ## [0.5.4]
 
 ### Added

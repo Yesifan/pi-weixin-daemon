@@ -4,8 +4,7 @@
 
 ## 先读
 
-- [`domain-model.md`](domain-model.md) —— 实体（微信真人 / 账号 / 项目 / 会话）与变量
-  （`accountId`、`senderId`、`userId`、`context_token`…）的**术语基准**。
+- [`domain-model.md`](domain-model.md) —— 确认项目的 **术语基准**。
 
 ## 主题文档
 
@@ -18,6 +17,4 @@
 - 既定方案 / 待办需求：`requirements/`
 - 架构决策记录（ADR）：`adr/`
 
-## 阅读建议
 
-想了解"系统怎么运作" → `domain-model.md` → `routing.md`；遇到协议 / 微信行为疑问 → `ilink-protocol.md`；想查某已定方案 / 待办 → `requirements/`、`adr/`。

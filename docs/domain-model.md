@@ -38,8 +38,8 @@
 - 把若干 account 聚合到**同一个工作目录**，并共享一个 Pi 会话。
 - **标识**：`projectId`（项目名，配置记录的 key）。
 - **属性**（存于 `config.json`）：`cwd`、`accounts: accountId[]`、`enabled`。
-- **运行时**：`ProjectRuntime`（一个项目一个），内含 `Bridge`
-  （busy / abort / 发言范围 / 命令路由）。
+- **运行时**：`ProjectController`（一个项目一个），内含 `SessionController`
+  （单一会话状态机：busy / abort / 发言范围 / 命令执行）。
 
 ### 1.4 会话（Session）
 
@@ -122,7 +122,7 @@
   pi-weixin 长轮询(getupdates) 拿到消息A   # 持有一条 from_user_id = user
          │        # 归一化成 InboundMessage{ accountId=bot, senderId=user }
          ▼
-  pi-weixin 投递到 project → ProjectRuntime → Bridge
+  pi-weixin 投递到 project → ProjectController → SessionController
          │        # 需求②：给文本追加 "-- from weixin <账号name>"
          ▼
   pi agent 处理，生成回复消息B
