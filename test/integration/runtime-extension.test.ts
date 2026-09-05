@@ -29,7 +29,6 @@ describe("M3: daemon runtime weixin extension (real SDK)", () => {
           fileSender: { sendFile: (turn, p, caption) => transport.sendFile(turn, p, caption) },
           getCurrentTurn: () => currentTurn,
           cwd: projectDir,
-          tmpDir: path.join(projectDir, ".pi-weixin", "tmp"),
           logger,
         }),
       ],

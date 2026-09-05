@@ -104,6 +104,14 @@ describe("project-store", () => {
     ).toThrow(/already assigned to project "foo"/);
   });
 
+  it("rejects changing a project's cwd after creation (fixed cwd)", () => {
+    const store = new ProjectStore(tmpConfig());
+    store.upsert("foo", { cwd: process.cwd(), accounts: ["acct-a"], enabled: false });
+    expect(() =>
+      store.upsert("foo", { cwd: "/somewhere/else", accounts: ["acct-a"], enabled: false }),
+    ).toThrow(/cwd is fixed/);
+  });
+
   it("allows an account to remain in the same project during update", () => {
     const store = new ProjectStore(tmpConfig());
     store.upsert("foo", { cwd: process.cwd(), accounts: ["acct-a"], enabled: false });

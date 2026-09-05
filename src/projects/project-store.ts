@@ -76,6 +76,11 @@ export class ProjectStore {
   /** Insert or update a project with semantic validation against existing data. */
   upsert(name: string, config: ProjectConfig): void {
     const data = this.read();
+    // `cwd` is fixed after creation (ADR-0003 D-B): changing it is rejected.
+    const existing = data.projects[name];
+    if (existing && existing.cwd !== config.cwd) {
+      throw new Error(`project "${name}" cwd is fixed (${existing.cwd}); recreate the project to change it`);
+    }
     const errors = validateProjectForInsert(data, name, config);
     if (errors.length > 0) throw new Error(errors.join("; "));
     data.projects[name] = { ...config };

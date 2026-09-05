@@ -107,9 +107,6 @@ export class RpcServer {
       case "project.create":
         await this.daemon.createProject(params.name as string, params.cwd as string);
         return this.daemon.getProjectStatuses();
-      case "project.set":
-        await this.daemon.setProjectCwd(params.name as string, params.cwd as string);
-        return this.daemon.getProjectStatuses();
       case "project.account.add":
         await this.daemon.addProjectAccounts(
           params.name as string,

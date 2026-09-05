@@ -164,3 +164,26 @@ describe("ProjectManager: account routing + project isolation (fake)", () => {
     expect(h.fakes.get("foo")).toBeUndefined();
   });
 });
+
+describe("ProjectManager: desired → diff → restart (W2/W10)", () => {
+  it("accounts change → old runtime stopped and a fresh one built", async () => {
+    const h = setup(twoProjects as never);
+    await start(h);
+    const oldFoo = h.fakes.get("foo")!;
+
+    // Remove account B from foo: runtime-key sorted(accounts) changes.
+    await h.pm.sync([
+      { name: "foo", config: { cwd: "/fake/foo", accounts: ["A"], enabled: true } },
+      { name: "bar", config: { cwd: "/fake/bar", accounts: ["C"], enabled: true } },
+    ] as never);
+
+    const newFoo = h.fakes.get("foo")!;
+    expect(newFoo).not.toBe(oldFoo);
+    expect(oldFoo.stopCalls).toBeGreaterThan(0);
+
+    // B is no longer bound: its inbound is dropped (unbound account).
+    await h.pm.dispatch("B", textMsg("B", "u-b", "m1", "hi"));
+    await tick();
+    expect(newFoo.prompts).toHaveLength(0);
+  });
+});

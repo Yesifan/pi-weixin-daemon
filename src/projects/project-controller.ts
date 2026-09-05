@@ -2,29 +2,19 @@ import type { InteractionPort } from "../pi/ports.js";
 import type { SessionRuntimePort } from "../sessions/runtime-port.js";
 import { SessionController } from "../sessions/session-controller.js";
 import { CurrentTurn, toTurnContext } from "../sessions/turn-context.js";
-import { CommandRouter } from "./command-router.js";
 import { WeixinInteractionController } from "../weixin/interaction-controller.js";
 import type {
   InboundMessage,
   WeixinTransport,
 } from "../weixin/types.js";
 import type { Logger } from "../util/logger.js";
+import { CommandRouter } from "./command-router.js";
+import { ParticipantRegistry, type Participant } from "./participant-registry.js";
+import type { ProjectRuntimeConfig } from "./project-config.js";
 import type { ProjectRuntimeState } from "./types.js";
 
-/** A participant in a project: a real weixin sender reached via one account. */
-export interface Participant {
-  accountId: string;
-  senderId: string;
-  contextToken?: string;
-  lastSeenAt: number;
-}
-
-function participantKey(accountId: string, senderId: string): string {
-  return `${accountId}:${senderId}`;
-}
-
-/** Factory builds the per-project agent runtime (real PiSdkHost, or a fake in tests). */
-export interface ProjectRuntimeFactoryContext {
+/** Factory builds the per-project agent host (real PiSdkHost, or a fake in tests). */
+export interface ProjectHostFactoryContext {
   projectId: string;
   cwd: string;
   accounts: string[];
@@ -32,23 +22,21 @@ export interface ProjectRuntimeFactoryContext {
   interaction: InteractionPort;
   logger: Logger;
 }
-export type ProjectRuntimeFactory = (ctx: ProjectRuntimeFactoryContext) => Promise<SessionRuntimePort>;
+export type ProjectHostFactory = (ctx: ProjectHostFactoryContext) => Promise<SessionRuntimePort>;
 
-export interface ProjectRuntimeOptions {
-  projectId: string;
-  cwd: string;
-  accounts: string[];
+export interface ProjectControllerOptions {
+  config: ProjectRuntimeConfig;
   /** Per-project outbound facade; also used by the weixin runtime extension. */
   transport: WeixinTransport;
   logger: Logger;
-  factory: ProjectRuntimeFactory;
+  factory: ProjectHostFactory;
   /** Human label for an account (e.g. its name) used in "-- from weixin <name>". */
   resolveSenderName?: (accountId: string) => string;
   /** Idle window before the shared session is auto-closed (min for tests). */
   sessionIdleMs?: number;
 }
 
-export interface RuntimeStatusView {
+export interface ProjectStatusView {
   state: ProjectRuntimeState | "off";
   sessionFile?: string;
   sessionId?: string;
@@ -59,32 +47,31 @@ export interface RuntimeStatusView {
 }
 
 /**
- * One project's runtime: cwd-bound session + participants/broadcast.
+ * One project's runtime (ADR-0004): composes a SessionController + CommandRouter
+ * + ParticipantRegistry over an immutable config snapshot.
  *
  * Fault isolation: whatever happens here (turn error, pi crash) is contained to
- * this instance. `state` mirrors the session controller's state machine while a
- * turn is active and the lifecycle (starting/stopping/error) otherwise.
+ * this instance. `state` mirrors the session state machine while a turn is
+ * active and the lifecycle (starting/stopping/error) otherwise.
  */
-export class ProjectRuntime {
-  readonly projectId: string;
-  readonly cwd: string;
-  readonly accounts: string[];
+export class ProjectController {
+  readonly config: ProjectRuntimeConfig;
   state: ProjectRuntimeState | "off" = "starting";
   error?: string;
 
   private session?: SessionController;
   private readonly router = new CommandRouter();
-
-  /** Registered project senders (real senderId, not account.userId). */
-  private readonly participants = new Map<string, Participant>();
+  private readonly registry = new ParticipantRegistry();
   /** Set once start() settles (extensions bound / session_start dispatched). */
   private resolveStarted!: () => void;
   private readonly started: Promise<void> = new Promise((r) => (this.resolveStarted = r));
 
-  constructor(private readonly opts: ProjectRuntimeOptions) {
-    this.projectId = opts.projectId;
-    this.cwd = opts.cwd;
-    this.accounts = opts.accounts;
+  constructor(private readonly opts: ProjectControllerOptions) {
+    this.config = opts.config;
+  }
+
+  get projectId(): string {
+    return this.config.projectId;
   }
 
   async start(): Promise<void> {
@@ -98,15 +85,15 @@ export class ProjectRuntime {
         logger: this.opts.logger,
       });
       const host = await this.opts.factory({
-        projectId: this.projectId,
-        cwd: this.cwd,
-        accounts: this.accounts,
+        projectId: this.config.projectId,
+        cwd: this.config.cwd,
+        accounts: this.config.accounts,
         transport: this.opts.transport,
         interaction,
         logger: this.opts.logger,
       });
       this.session = new SessionController({
-        projectId: this.projectId,
+        projectId: this.config.projectId,
         host,
         interaction,
         transport: this.opts.transport,
@@ -118,12 +105,11 @@ export class ProjectRuntime {
       });
       await this.session.start();
       this.state = "idle";
-      // No session yet (lazy); idle auto-close is scheduled on first message.
-      this.opts.logger.info({ project: this.projectId, cwd: this.cwd }, "project runtime started");
+      this.opts.logger.info({ project: this.projectId, cwd: this.config.cwd }, "project controller started");
     } catch (err) {
       this.state = "error";
       this.error = err instanceof Error ? err.message : String(err);
-      this.opts.logger.error({ err, project: this.projectId }, "project runtime start failed");
+      this.opts.logger.error({ err, project: this.projectId }, "project controller start failed");
       throw err;
     } finally {
       this.resolveStarted();
@@ -133,7 +119,7 @@ export class ProjectRuntime {
   /** Route one inbound message into this project's session. */
   async handleMessage(msg: InboundMessage): Promise<void> {
     // Any inbound (command or not) counts as activity and (re)registers the sender.
-    this.registerParticipant(msg);
+    this.registry.register(msg);
 
     // ① Wait until the runtime finished starting so the first tool call is gated
     //    against the fully-configured project scope.
@@ -185,17 +171,6 @@ export class ProjectRuntime {
     this.reflectState(session);
   }
 
-  /** Reflect the session state machine into the project lifecycle state. */
-  private reflectState(session: SessionController): void {
-    if (this.state === "stopping") return;
-    const s = session.getState();
-    if (s === "busy" || s === "replacing") this.state = "busy";
-    else if (s === "faulted") {
-      this.state = "error";
-      this.error = this.error ?? "session faulted";
-    } else this.state = "idle";
-  }
-
   async stop(): Promise<void> {
     this.state = "stopping";
     await this.session?.stop().catch((err: unknown) =>
@@ -210,10 +185,9 @@ export class ProjectRuntime {
     await this.start();
   }
 
-  getStatus(): RuntimeStatusView {
+  getStatus(): ProjectStatusView {
     let state: ProjectRuntimeState | "off" = this.state;
     const session = this.session;
-    // Reflect the live session state machine (mirrors the old bridge.getState()).
     if (session && this.state !== "error" && this.state !== "stopping" && this.state !== "off") {
       const s = session.getState();
       if (s === "busy" || s === "replacing") state = "busy";
@@ -232,15 +206,22 @@ export class ProjectRuntime {
     };
   }
 
+  /** Reflect the session state machine into the project lifecycle state. */
+  private reflectState(session: SessionController): void {
+    if (this.state === "stopping") return;
+    const s = session.getState();
+    if (s === "busy" || s === "replacing") this.state = "busy";
+    else if (s === "faulted") {
+      this.state = "error";
+      this.error = this.error ?? "session faulted";
+    } else this.state = "idle";
+  }
+
   // --- participants / broadcast --------------------------------------------
 
-  private registerParticipant(msg: InboundMessage): void {
-    this.participants.set(participantKey(msg.accountId, msg.senderId), {
-      accountId: msg.accountId,
-      senderId: msg.senderId,
-      contextToken: msg.contextToken,
-      lastSeenAt: Date.now(),
-    });
+  /** Authorized targets: observed senders ∩ currently-configured accounts. */
+  private broadcastTargets() {
+    return this.registry.getBroadcastTargets(this.config.accounts);
   }
 
   /** Send a proactive text to a participant via their account's transport. */
@@ -251,9 +232,9 @@ export class ProjectRuntime {
     );
   }
 
-  /** ④ Broadcast the agent's final reply to every registered participant. */
+  /** ④ Broadcast the agent's final reply to every authorized participant. */
   private readonly broadcastToRegistry = async (text: string): Promise<void> => {
-    for (const p of this.participants.values()) {
+    for (const p of this.broadcastTargets()) {
       await this.sendTo(p, text).catch((err: unknown) =>
         this.opts.logger.warn(
           { err, account: p.accountId, sender: p.senderId },
@@ -263,14 +244,14 @@ export class ProjectRuntime {
     }
   };
 
-  /** ③ Notify every other participant that a sender spoke. */
+  /** ③ Notify every other authorized participant that a sender spoke. */
   private async notifyOthers(msg: InboundMessage): Promise<void> {
-    const originKey = participantKey(msg.accountId, msg.senderId);
+    const originKey = `${msg.accountId}:${msg.senderId}`;
     const name = this.opts.resolveSenderName?.(msg.accountId) ?? msg.accountId;
     const text = msg.text?.trim() ? msg.text.trim() : attachmentPlaceholder(msg);
     const notify = `${name}: ${text}`;
-    for (const [key, p] of this.participants) {
-      if (key === originKey) continue;
+    for (const p of this.broadcastTargets()) {
+      if (`${p.accountId}:${p.senderId}` === originKey) continue;
       await this.sendTo(p, notify).catch((err: unknown) =>
         this.opts.logger.warn(
           { err, account: p.accountId, sender: p.senderId },

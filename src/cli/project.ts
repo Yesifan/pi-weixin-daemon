@@ -21,7 +21,7 @@ export function projectCommand(): Command {
         "  pi-wx project <name> add|remove <label>...\n" +
         "  pi-wx project list|show|enable|disable|restart|remove",
     )
-    .option("--cwd <path>", "project working directory (for create/set)")
+    .option("--cwd <path>", "project working directory (for create; fixed after creation)")
     .argument("<args...>")
     .action(async (args: string[], opts: { cwd?: string }) => {
       const [first, ...rest] = args;
@@ -65,12 +65,6 @@ async function dispatch(first: string, rest: string[], opts: { cwd?: string }): 
       if (!name) throw new Error("usage: project show <name>");
       const p = await rpcCall<ProjectStatus>("project.get", { name });
       console.log(formatProjectRow(p));
-      return;
-    }
-    case "set": {
-      if (!name || !opts.cwd) throw new Error("usage: project set <name> --cwd <path>");
-      await rpcCall("project.set", { name, cwd: resolveCwd(opts.cwd) });
-      console.log(`Updated cwd for project "${name}".`);
       return;
     }
     case "enable":

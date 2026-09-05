@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { validateSendFileParams } from "../../src/pi/extensions/weixin-send-file.js";
 import { sanitizeFilename } from "../../src/util/sanitize.js";
 
-describe("validateSendFileParams", () => {
+describe("validateSendFileParams (W9: no path boundary)", () => {
   let root: string;
 
   beforeEach(() => {
@@ -14,7 +14,7 @@ describe("validateSendFileParams", () => {
   it("accepts a regular file inside cwd", () => {
     const file = path.join(root, "ok.txt");
     fs.writeFileSync(file, "hi");
-    const result = validateSendFileParams(file, root, path.join(root, "tmp"));
+    const result = validateSendFileParams(file, root);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.resolvedPath).toBe(file);
@@ -23,7 +23,7 @@ describe("validateSendFileParams", () => {
   });
 
   it("rejects a missing file", () => {
-    const result = validateSendFileParams(path.join(root, "nope.txt"), root, path.join(root, "tmp"));
+    const result = validateSendFileParams(path.join(root, "nope.txt"), root);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("does not exist");
   });
@@ -31,37 +31,30 @@ describe("validateSendFileParams", () => {
   it("rejects a directory", () => {
     const dir = path.join(root, "subdir");
     fs.mkdirSync(dir);
-    const result = validateSendFileParams(dir, root, path.join(root, "tmp"));
+    const result = validateSendFileParams(dir, root);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("not a regular file");
   });
 
-  it("rejects a file outside cwd and tmp", () => {
+  it("accepts a file outside cwd (permission model = agent process)", () => {
     const outside = path.join(root, "..", "outside.txt");
     fs.writeFileSync(outside, "secret");
-    const result = validateSendFileParams(outside, root, path.join(root, "tmp"));
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("outside cwd/tmp");
+    const result = validateSendFileParams(outside, root);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.resolvedPath).toBe(path.resolve(outside));
   });
 
-  it("rejects path traversal attempts", () => {
-    const result = validateSendFileParams("../outside.txt", root, path.join(root, "tmp"));
-    expect(result.ok).toBe(false);
-  });
-
-  it("accepts a file inside the daemon tmp dir", () => {
-    const tmp = path.join(root, "daemon-tmp");
-    fs.mkdirSync(tmp);
-    const file = path.join(tmp, "staged.bin");
-    fs.writeFileSync(file, "data");
-    const result = validateSendFileParams(file, root, tmp);
+  it("resolves relative ../ paths against cwd without a boundary check", () => {
+    const outside = path.join(root, "..", "outside.txt");
+    fs.writeFileSync(outside, "secret");
+    const result = validateSendFileParams("../outside.txt", root);
     expect(result.ok).toBe(true);
   });
 
   it("rejects an empty basename after sanitization", () => {
     const file = path.join(root, " \u0001");
     fs.writeFileSync(file, "x");
-    const result = validateSendFileParams(file, root, path.join(root, "tmp"));
+    const result = validateSendFileParams(file, root);
     expect(result.ok).toBe(false);
   });
 });

@@ -8,9 +8,10 @@ import type { WeixinTransport } from "./weixin/types.js";
 import { migrateLegacyAccounts } from "./config/paths.js";
 import { ProjectManager } from "./projects/project-manager.js";
 import type {
-  ProjectRuntimeFactory,
-  ProjectRuntimeFactoryContext,
-} from "./projects/project-runtime.js";
+  ProjectHostFactory,
+  ProjectHostFactoryContext,
+} from "./projects/project-controller.js";
+import { WeixinFileSender } from "./weixin/file-sender.js";
 import { ProjectStore } from "./projects/project-store.js";
 import type { ProjectConfig, ProjectStoreData } from "./projects/types.js";
 import {
@@ -36,29 +37,26 @@ export interface DaemonDeps {
     token?: string,
     baseUrl?: string,
   ) => Promise<WeixinTransport>;
-  /** Inject for tests; default builds a real PiRuntime bound to the project cwd. */
-  projectPiFactory?: ProjectRuntimeFactory;
+  /** Inject for tests; default builds a real PiSdkHost bound to the project cwd. */
+  projectPiFactory?: ProjectHostFactory;
   /** Start the UDS RPC server (default false; `serve` enables it). */
   startRpc?: boolean;
   rpcSocketPath?: string;
 }
 
 /** Default project Pi factory: weixin tool + UI context wired to the project interaction port. */
-async function createProjectPiRuntime(ctx: ProjectRuntimeFactoryContext): Promise<PiSdkHost> {
+async function createProjectPiRuntime(ctx: ProjectHostFactoryContext): Promise<PiSdkHost> {
   const { cwd, transport, interaction, logger } = ctx;
-  const tmpDir = path.join(cwd, ".pi-weixin", "tmp");
   const inboxDir = path.join(cwd, ".pi-weixin", "inbox");
-  fs.mkdirSync(tmpDir, { recursive: true });
   fs.mkdirSync(inboxDir, { recursive: true });
   return new PiSdkHost({
     cwd,
     logger,
     extensionFactories: [
       createWeixinSendFileExtension({
-        fileSender: { sendFile: (turn, p, caption) => transport.sendFile(turn, p, caption) },
+        fileSender: new WeixinFileSender(transport),
         getCurrentTurn: () => interaction.getCurrentTurn(),
         cwd,
-        tmpDir,
         logger,
       }),
     ],
@@ -66,13 +64,13 @@ async function createProjectPiRuntime(ctx: ProjectRuntimeFactoryContext): Promis
   });
 }
 
-const defaultProjectPiFactory: ProjectRuntimeFactory = (ctx) => createProjectPiRuntime(ctx);
+const defaultProjectPiFactory: ProjectHostFactory = (ctx) => createProjectPiRuntime(ctx);
 
 /**
  * pi-weixin-daemon composition root (one long-running daemon, many projects).
  *
  * Owns: config (ProjectStore) -> AccountManager (per-account transports) ->
- * ProjectManager (ProjectRuntime per project) -> account->project dispatch.
+ * ProjectManager (ProjectController per project) -> account->project dispatch.
  * Graceful shutdown stops projects first, then account monitors.
  */
 export class Daemon {
@@ -200,17 +198,9 @@ export class Daemon {
 
   // --- RPC mutation entry points (daemon is the sole config writer) ---
 
-  /** Create a project (accounts=[], enabled=false). */
+  /** Create a project (accounts=[], enabled=false). `cwd` is fixed after creation. */
   async createProject(name: string, cwd: string): Promise<void> {
     this.store.upsert(name, { cwd, accounts: [], enabled: false });
-    await this.reload();
-  }
-
-  /** Update a project's cwd (accounts/enabled preserved). */
-  async setProjectCwd(name: string, cwd: string): Promise<void> {
-    const cfg = this.store.get(name);
-    if (!cfg) throw new Error(`project "${name}" does not exist`);
-    this.store.upsert(name, { ...cfg, cwd });
     await this.reload();
   }
 

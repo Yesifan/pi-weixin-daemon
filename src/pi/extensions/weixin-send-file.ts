@@ -12,10 +12,8 @@ export interface WeixinSendFileExtensionDeps {
   fileSender: FileSenderPort;
   /** Current turn origin (set by the session controller while a run is active). */
   getCurrentTurn: () => TurnContext | undefined;
-  /** Project cwd; relative tool paths resolve against it, sendable files live inside it. */
+  /** Project cwd; relative tool paths resolve against it. */
   cwd: string;
-  /** Daemon-managed temp directory for outbound staging. */
-  tmpDir: string;
   logger: Logger;
 }
 
@@ -31,15 +29,13 @@ export type PathValidationResult =
   | { ok: false; error: string };
 
 /**
- * v0.1 send-file policy:
- *  - path must exist and be a regular file
- *  - filename is sanitized (control chars / path separators stripped)
- *  - the file must resolve inside the project cwd or the daemon tmp dir
+ * Send-file policy (ADR-0003 D-G): **no path boundary**.
  *
- * (Removed in phase 5 / W9: the path boundary goes away; the permission model
- * becomes the agent process's own permissions.)
+ * Only existence + regular-file + filename sanitization are enforced. The
+ * permission model is the agent process's own permissions — the same as its
+ * bash/read/write tools — so no lexical sandbox is imposed here.
  */
-export function validateSendFileParams(filePath: string, cwd: string, tmpDir: string): PathValidationResult {
+export function validateSendFileParams(filePath: string, cwd: string): PathValidationResult {
   const resolved = path.resolve(cwd, filePath);
 
   let stat: fs.Stats;
@@ -50,17 +46,6 @@ export function validateSendFileParams(filePath: string, cwd: string, tmpDir: st
   }
   if (!stat.isFile()) {
     return { ok: false, error: `not a regular file: ${filePath}` };
-  }
-
-  const inside = (dir: string) => {
-    const rel = path.relative(path.resolve(dir), resolved);
-    return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-  };
-  if (!inside(cwd) && !inside(tmpDir)) {
-    return {
-      ok: false,
-      error: `refusing to send file outside cwd/tmp: ${filePath} (cwd=${cwd}, tmp=${tmpDir})`,
-    };
   }
 
   const basename = sanitizeFilename(path.basename(resolved));
@@ -86,7 +71,7 @@ export function createWeixinSendFileExtension(deps: WeixinSendFileExtensionDeps)
       description:
         "Send a file to the current Weixin conversation as a native Weixin file attachment. " +
         "The file must already exist on disk (created by other tools such as bash or write) " +
-        "and must be inside the project directory. Optional caption text may accompany it.",
+        "and be readable by the agent process. Optional caption text may accompany it.",
       parameters: SendFileParamsSchema,
       execute: async (_toolCallId, params: SendFileParams, _signal, _onUpdate) => {
         const turn = deps.getCurrentTurn();
@@ -98,7 +83,7 @@ export function createWeixinSendFileExtension(deps: WeixinSendFileExtensionDeps)
           };
         }
 
-        const validated = validateSendFileParams(params.path, deps.cwd, deps.tmpDir);
+        const validated = validateSendFileParams(params.path, deps.cwd);
         if (!validated.ok) {
           deps.logger.warn({ error: validated.error }, "weixin_send_file rejected");
           return {

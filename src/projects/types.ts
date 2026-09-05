@@ -9,7 +9,7 @@ export interface ProjectConfig {
   cwd: string;
   /** 0..N accounts; an account may belong to at most one project. */
   accounts: string[];
-  /** Persisted desired state. true = daemon should maintain this ProjectRuntime. */
+  /** Persisted desired state. true = daemon should maintain this ProjectController. */
   enabled: boolean;
 }
 
@@ -19,7 +19,7 @@ export interface ProjectStoreData {
   projects: Record<string, ProjectConfig>;
 }
 
-/** Runtime lifecycle state for a ProjectRuntime (not persisted). */
+/** Runtime lifecycle state for a ProjectController (not persisted). */
 export type ProjectRuntimeState = "starting" | "idle" | "busy" | "stopping" | "error";
 
 /** Observable project status exposed over RPC / `project list`. */

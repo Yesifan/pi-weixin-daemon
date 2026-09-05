@@ -3,8 +3,8 @@ import type { InboundMessage, TurnContext, WeixinTransport } from "../weixin/typ
 /**
  * Per-project outbound facade. Routes every outbound call to the per-account
  * transport owning the TurnContext's accountId. Inbound is NOT broadcast here —
- * the daemon's dispatch routes account -> project -> ProjectRuntime.handleMessage,
- * so the Bridge consumes inbound directly (see ProjectRuntime).
+ * the daemon's dispatch routes account -> project -> ProjectController.handleMessage,
+ * so the controller consumes inbound directly (see ProjectController).
  */
 export class ProjectTransport implements WeixinTransport {
   private readonly accountIds: Set<string>;
