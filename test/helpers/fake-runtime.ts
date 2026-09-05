@@ -11,6 +11,8 @@ export class FakeAgentRuntime implements SessionRuntimePort {
   prompts: Array<{ text: string; images?: HostImage[] }> = [];
   newSessionCalls = 0;
   compactCalls = 0;
+  ensureSessionCalls = 0;
+  stopCalls = 0;
   private listeners = new Set<(event: PiHostEvent) => void>();
   private pending:
     | { resolve: () => void; reject: (err: Error) => void }
@@ -21,8 +23,12 @@ export class FakeAgentRuntime implements SessionRuntimePort {
   }
 
   async start(): Promise<void> {}
-  async stop(): Promise<void> {}
-  async ensureSession(): Promise<void> {}
+  async stop(): Promise<void> {
+    this.stopCalls += 1;
+  }
+  async ensureSession(): Promise<void> {
+    this.ensureSessionCalls += 1;
+  }
 
   hasSession(): boolean {
     return true;

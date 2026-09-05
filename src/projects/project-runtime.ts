@@ -1,17 +1,15 @@
 import type { InteractionPort } from "../pi/ports.js";
 import type { SessionRuntimePort } from "../sessions/runtime-port.js";
-import { toTurnContext } from "../sessions/turn-context.js";
-import { parseCommand } from "../bridge/commands.js";
-import { Bridge } from "../bridge/router.js";
+import { parseCommand } from "../sessions/commands.js";
+import { SessionController } from "../sessions/session-controller.js";
+import { CurrentTurn, toTurnContext } from "../sessions/turn-context.js";
+import { WeixinInteractionController } from "../weixin/interaction-controller.js";
 import type {
   InboundMessage,
   WeixinTransport,
 } from "../weixin/types.js";
 import type { Logger } from "../util/logger.js";
 import type { ProjectRuntimeState } from "./types.js";
-
-/** Default auto-close idle window for a shared session (10 minutes). */
-export const DEFAULT_SESSION_IDLE_MS = 10 * 60 * 1000;
 
 /** A participant in a project: a real weixin sender reached via one account. */
 export interface Participant {
@@ -61,11 +59,11 @@ export interface RuntimeStatusView {
 }
 
 /**
- * One project's runtime: cwd-bound AgentRuntime + Bridge (busy/abort/turn scope).
+ * One project's runtime: cwd-bound session + participants/broadcast.
  *
  * Fault isolation: whatever happens here (turn error, pi crash) is contained to
- * this instance. `state` mirrors the bridge's concurrency state while a turn is
- * active and the lifecycle (starting/stopping/error) otherwise.
+ * this instance. `state` mirrors the session controller's state machine while a
+ * turn is active and the lifecycle (starting/stopping/error) otherwise.
  */
 export class ProjectRuntime {
   readonly projectId: string;
@@ -74,14 +72,10 @@ export class ProjectRuntime {
   state: ProjectRuntimeState | "off" = "starting";
   error?: string;
 
-  private runtime?: SessionRuntimePort;
-  private bridge?: Bridge;
+  private session?: SessionController;
 
   /** Registered project senders (real senderId, not account.userId). */
   private readonly participants = new Map<string, Participant>();
-  private lastActivityAt = Date.now();
-  private sessionExpired = false;
-  private idleTimer: NodeJS.Timeout | undefined;
   /** Set once start() settles (extensions bound / session_start dispatched). */
   private resolveStarted!: () => void;
   private readonly started: Promise<void> = new Promise((r) => (this.resolveStarted = r));
@@ -96,24 +90,33 @@ export class ProjectRuntime {
     this.state = "starting";
     this.error = undefined;
     try {
-      this.bridge = new Bridge({
+      const currentTurn = new CurrentTurn();
+      const interaction = new WeixinInteractionController({
+        getCurrentTurn: () => currentTurn.get(),
         transport: this.opts.transport,
         logger: this.opts.logger,
-        resolveSenderLabel: (msg) => this.opts.resolveSenderName?.(msg.accountId) ?? msg.accountId,
-        broadcastText: (text) => this.broadcastToRegistry(text),
       });
-      this.runtime = await this.opts.factory({
+      const host = await this.opts.factory({
         projectId: this.projectId,
         cwd: this.cwd,
         accounts: this.accounts,
         transport: this.opts.transport,
-        interaction: this.bridge,
+        interaction,
         logger: this.opts.logger,
       });
-      await this.runtime.start();
-      this.bridge.bindRuntime(this.runtime);
+      this.session = new SessionController({
+        projectId: this.projectId,
+        host,
+        interaction,
+        transport: this.opts.transport,
+        currentTurn,
+        logger: this.opts.logger,
+        sessionIdleMs: this.opts.sessionIdleMs,
+        broadcastText: (text) => this.broadcastToRegistry(text),
+        resolveSenderLabel: (msg) => this.opts.resolveSenderName?.(msg.accountId) ?? msg.accountId,
+      });
+      await this.session.start();
       this.state = "idle";
-      this.lastActivityAt = Date.now();
       // No session yet (lazy); idle auto-close is scheduled on first message.
       this.opts.logger.info({ project: this.projectId, cwd: this.cwd }, "project runtime started");
     } catch (err) {
@@ -126,16 +129,13 @@ export class ProjectRuntime {
     }
   }
 
-  /** Route one inbound message into this project's bridge. */
+  /** Route one inbound message into this project's session. */
   async handleMessage(msg: InboundMessage): Promise<void> {
     // Any inbound (command or not) counts as activity and (re)registers the sender.
     this.registerParticipant(msg);
-    this.lastActivityAt = Date.now();
-    this.scheduleIdleCheck();
 
-    // ① Wait until the runtime finished starting (extensions bound, session_start
-    //    dispatched) so the first tool call is gated against the fully-configured
-    //    project scope, not an init/global-only state.
+    // ① Wait until the runtime finished starting so the first tool call is gated
+    //    against the fully-configured project scope.
     await this.started;
 
     // W1 fail-closed: a fatal initialization error put this project into the
@@ -150,17 +150,6 @@ export class ProjectRuntime {
       return;
     }
 
-    // ① A session was auto-closed while idle: start a fresh one on next message.
-    if (this.sessionExpired) {
-      this.sessionExpired = false;
-      try {
-        await this.runtime?.newSession();
-        this.opts.logger.info({ project: this.projectId }, "new session after idle close");
-      } catch (err) {
-        this.opts.logger.warn({ err, project: this.projectId }, "newSession after idle close failed");
-      }
-    }
-
     // ③ Notify other project participants when a sender speaks (ordinary messages only).
     if (!parseCommand(msg.text)) {
       await this.notifyOthers(msg).catch((err: unknown) =>
@@ -168,44 +157,34 @@ export class ProjectRuntime {
       );
     }
 
-    const bridge = this.requireBridge();
+    const session = this.requireSession();
     try {
-      await bridge.ingest(msg);
-      // Bridge may flip to busy/RUNNING during the turn; reflect lifecycle only.
-      if (this.state !== "stopping") {
-        this.state = bridge.getState() === "IDLE" ? "idle" : "busy";
-      }
+      await session.handleMessage(msg);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.opts.logger.warn({ err, project: this.projectId }, "project message handling error");
       this.state = "error";
       this.error = message;
+      return;
     }
-  }
 
-  async abort(): Promise<void> {
-    this.state = "stopping";
-    try {
-      await this.runtime?.abort();
-    } catch (err) {
-      this.opts.logger.warn({ err, project: this.projectId }, "abort error");
-    } finally {
-      this.state = "idle";
+    // Reflect the session state machine into the project lifecycle state.
+    if (this.state !== "stopping") {
+      const s = session.getState();
+      if (s === "busy" || s === "replacing") this.state = "busy";
+      else if (s === "faulted") {
+        this.state = "error";
+        this.error = this.error ?? "session faulted";
+      } else this.state = "idle";
     }
   }
 
   async stop(): Promise<void> {
     this.state = "stopping";
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = undefined;
-    }
-    this.bridge?.detach();
-    await this.runtime?.stop().catch((err: unknown) =>
-      this.opts.logger.warn({ err, project: this.projectId }, "pi runtime stop error"),
+    await this.session?.stop().catch((err: unknown) =>
+      this.opts.logger.warn({ err, project: this.projectId }, "session stop error"),
     );
-    this.runtime = undefined;
-    this.bridge = undefined;
+    this.session = undefined;
     this.state = "off";
   }
 
@@ -216,11 +195,15 @@ export class ProjectRuntime {
 
   getStatus(): RuntimeStatusView {
     let state: ProjectRuntimeState | "off" = this.state;
-    const bridge = this.bridge;
-    if (bridge && this.state !== "error" && this.state !== "stopping" && this.state !== "off") {
-      state = bridge.getState() === "IDLE" ? "idle" : "busy";
+    const session = this.session;
+    // Reflect the live session state machine (mirrors the old bridge.getState()).
+    if (session && this.state !== "error" && this.state !== "stopping" && this.state !== "off") {
+      const s = session.getState();
+      if (s === "busy" || s === "replacing") state = "busy";
+      else if (s === "faulted") state = "error";
+      else state = "idle";
     }
-    const s = this.runtime?.getStatus();
+    const s = session?.getStatus();
     return {
       state,
       sessionFile: s?.sessionFile,
@@ -280,35 +263,9 @@ export class ProjectRuntime {
     }
   }
 
-  // --- idle auto-close -------------------------------------------------------
-
-  private scheduleIdleCheck(): void {
-    if (this.idleTimer) clearTimeout(this.idleTimer);
-    const idleMs = this.opts.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS;
-    if (!Number.isFinite(idleMs) || idleMs <= 0) return;
-    this.idleTimer = setTimeout(() => void this.checkIdle(), idleMs);
-  }
-
-  /** ① Auto-close the shared session after an idle window (broadcast + lazy new session). */
-  private async checkIdle(): Promise<void> {
-    if (this.state === "stopping" || this.state === "off" || this.state === "error") return;
-    if (this.sessionExpired) return;
-    const idleMs = this.opts.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS;
-    const now = Date.now();
-    // Idle auto-close only applies once a session exists; before lazy creation
-    // there is nothing to close.
-    if (!this.runtime?.hasSession() || this.bridge?.getState() !== "IDLE" || now - this.lastActivityAt < idleMs) {
-      this.scheduleIdleCheck();
-      return;
-    }
-    this.sessionExpired = true;
-    this.opts.logger.info({ project: this.projectId }, "session auto-closed (idle)");
-    await this.broadcastToRegistry("本次会话已关闭");
-  }
-
-  private requireBridge(): Bridge {
-    if (!this.bridge) throw new Error(`project "${this.projectId}" bridge not started`);
-    return this.bridge;
+  private requireSession(): SessionController {
+    if (!this.session) throw new Error(`project "${this.projectId}" session not started`);
+    return this.session;
   }
 }
 

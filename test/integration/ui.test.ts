@@ -1,82 +1,90 @@
 import { describe, it, expect, vi } from "vitest";
-import { Bridge } from "../../src/bridge/router.js";
-import { MultiAccountTransport } from "../../src/bridge/multi-account-transport.js";
-import { BUSY_REPLY } from "../../src/bridge/state.js";
+import { BUSY_REPLY } from "../../src/sessions/session-state.js";
+import { SessionController } from "../../src/sessions/session-controller.js";
+import { CurrentTurn } from "../../src/sessions/turn-context.js";
 import { WeixinUIContext } from "../../src/pi/ui-context.js";
 import type { InteractionPort } from "../../src/pi/ports.js";
+import { WeixinInteractionController } from "../../src/weixin/interaction-controller.js";
 import type { TurnContext } from "../../src/weixin/types.js";
 import { createLogger } from "../../src/util/logger.js";
 import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
 import { FakeWeixinTransport, makeInboundMessage, makeTurn } from "../helpers/fake-transport.js";
+import { MultiAccountTransport } from "../helpers/multi-account-transport.js";
 
 const logger = createLogger({ level: "silent" });
 
-function setupBridge() {
+function setupUiRouting() {
   const runtime = new FakeAgentRuntime();
   const transportA = new FakeWeixinTransport();
   const transportB = new FakeWeixinTransport();
   const multi = new MultiAccountTransport();
   multi.register("acct-a", transportA);
   multi.register("acct-b", transportB);
-  const bridge = new Bridge({ transport: multi, logger });
-  bridge.bindRuntime(runtime);
-  bridge.attach();
-  return { runtime, transportA, transportB, bridge };
+  const currentTurn = new CurrentTurn();
+  const interaction = new WeixinInteractionController({
+    getCurrentTurn: () => currentTurn.get(),
+    transport: multi,
+    logger,
+  });
+  const session = new SessionController({
+    projectId: "foo",
+    host: runtime,
+    interaction,
+    transport: multi,
+    currentTurn,
+    logger,
+  });
+  return { runtime, transportA, transportB, interaction, session };
 }
 
-describe("M9 bridge UI response routing", () => {
+const msg = (accountId: string, senderId: string, id: string, text: string) =>
+  makeInboundMessage({ accountId, senderId, messageId: id, text });
+
+describe("M9 interaction controller UI response routing", () => {
   it("turn account's next message resolves the UI waiter; other accounts get busy", async () => {
-    const { runtime, transportA, transportB, bridge } = setupBridge();
+    const { runtime, transportA, transportB, interaction, session } = setupUiRouting();
     // Start a real turn so currentTurn is set (as in production).
-    const turnPromise = transportA.emit(
-      makeInboundMessage({ accountId: "acct-a", senderId: "user-a", messageId: "t0", text: "开始任务" }),
-    );
+    const turnPromise = session.handleMessage(msg("acct-a", "user-a", "t0", "开始任务"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
-    expect(bridge.getState()).toBe("RUNNING");
+    expect(session.getState()).toBe("busy");
 
-    bridge.beginUiInteraction();
-    expect(bridge.getState()).toBe("WAITING_FOR_UI");
-
-    const responsePromise = bridge.waitForResponse(makeTurn("acct-a", "user-a"));
+    interaction.beginUiInteraction();
+    const responsePromise = interaction.waitForResponse(makeTurn("acct-a", "user-a"));
     let resolved = "";
     responsePromise.then((text) => (resolved = text));
 
     // Other account -> busy
-    await transportB.emit(
-      makeInboundMessage({ accountId: "acct-b", senderId: "user-b", messageId: "b1", text: "hi" }),
-    );
+    await session.handleMessage(msg("acct-b", "user-b", "b1", "hi"));
     expect(transportB.textsTo("acct-b")).toEqual([BUSY_REPLY]);
 
     // Turn account -> UI response
-    await transportA.emit(
-      makeInboundMessage({ accountId: "acct-a", senderId: "user-a", messageId: "a1", text: "1" }),
-    );
+    await session.handleMessage(msg("acct-a", "user-a", "a1", "1"));
     expect(resolved).toBe("1");
 
-    bridge.endUiInteraction();
-    expect(bridge.getState()).toBe("RUNNING");
+    interaction.endUiInteraction();
+    expect(interaction.isUiInteractionActive()).toBe(false);
 
     runtime.complete("done");
     await turnPromise;
   });
 
   it("cancelUiWaiters rejects pending dialogs (e.g. /abort)", async () => {
-    const { bridge } = setupBridge();
+    const { interaction } = setupUiRouting();
     const turn = makeTurn("acct-a", "user-a");
 
-    const responsePromise = bridge.waitForResponse(turn);
+    const responsePromise = interaction.waitForResponse(turn);
     const rejection = vi.fn();
     responsePromise.catch(rejection);
 
-    bridge.cancelUiWaiters("aborted");
+    interaction.cancelUiWaiters("aborted");
     await vi.waitFor(() => expect(rejection).toHaveBeenCalled());
     expect(rejection).toHaveBeenCalledWith(expect.objectContaining({ message: "aborted" }));
   });
 
   it("waitForResponse supports timeout", async () => {
-    const { bridge } = setupBridge();
+    const { interaction } = setupUiRouting();
     const turn = makeTurn("acct-a", "user-a");
-    const responsePromise = bridge.waitForResponse(turn, { timeoutMs: 20 });
+    const responsePromise = interaction.waitForResponse(turn, { timeoutMs: 20 });
     await expect(responsePromise).rejects.toThrow("timed out");
   });
 });
@@ -191,35 +199,30 @@ describe("M9 WeixinUIContext dialogs", () => {
   it("confirm/select/input ack the user with the received result", async () => {
     const { transport, broker, ui } = setupUi();
 
-    // confirm -> approve
     let promise = ui.confirm("部署", "放行？");
     await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
     broker.resolveWith("1");
     await expect(promise).resolves.toBe(true);
     expect(transport.sentTexts.at(-1)!.text).toContain("已确认");
 
-    // confirm -> cancel
     promise = ui.confirm("部署", "放行？");
     await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
     broker.resolveWith("取消");
     await expect(promise).resolves.toBe(false);
     expect(transport.sentTexts.at(-1)!.text).toContain("已取消");
 
-    // select -> permission-style allow (e.g. "Yes")
     promise = ui.select("Permission Required", ["Yes", "No"]);
     await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
     broker.resolveWith("1");
     await expect(promise).resolves.toBe("Yes");
     expect(transport.sentTexts.at(-1)!.text).toContain("已允许");
 
-    // select -> unrecognized reply warns and returns undefined
     promise = ui.select("Permission Required", ["Yes", "No"]);
     await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
     broker.resolveWith("zzz");
     await expect(promise).resolves.toBeUndefined();
     expect(transport.sentTexts.at(-1)!.text).toContain("无法识别");
 
-    // input
     promise = ui.input("版本", "v1");
     await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
     broker.resolveWith("v2.3.4");
@@ -230,13 +233,11 @@ describe("M9 WeixinUIContext dialogs", () => {
   it("timeout auto-cancels/denies and notifies the user", async () => {
     const { transport, broker, ui } = setupUi();
 
-    // confirm: user never replies -> auto-cancel (false) + notify
     const promiseConfirm = ui.confirm("部署", "放行？", { timeout: 40 });
     await expect(promiseConfirm).resolves.toBe(false);
     expect(transport.sentTexts.at(-1)!.text).toContain("自动取消");
     expect(broker.endCount).toBe(1);
 
-    // select (permission-style): user never replies -> auto-deny (undefined) + notify
     const promiseSelect = ui.select("Permission Required", ["Yes", "No"], { timeout: 40 });
     await expect(promiseSelect).resolves.toBeUndefined();
     expect(transport.sentTexts.at(-1)!.text).toContain("自动拒绝");
@@ -253,16 +254,13 @@ describe("M9 WeixinUIContext dialogs", () => {
   it("custom()/editor()/theme degrade without throwing (W6)", async () => {
     const { broker, ui } = setupUi();
 
-    // custom() resolves undefined (never rejects).
     await expect(ui.custom(() => undefined as never)).resolves.toBeUndefined();
 
-    // editor() degrades to the input dialog (prefill hint + next message).
     const p = ui.editor("编辑内容", "prefill");
     await vi.waitFor(() => expect(broker.waiters.length).toBe(1));
     broker.resolveWith("new text");
     await expect(p).resolves.toBe("new text");
 
-    // theme is a real Theme instance (never {} as Theme).
     expect(ui.theme).toBeDefined();
     expect(typeof ui.theme.fg).toBe("function");
   });

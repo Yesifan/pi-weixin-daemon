@@ -104,11 +104,14 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
       expect(h.transports.get("B")!.textsTo("B")).toContain("本次会话已关闭");
     });
 
-    const before = h.fakes.get("foo")!.newSessionCalls;
+    // W3: idle close disposes the session (real close), not just a flag.
+    expect(h.fakes.get("foo")!.stopCalls).toBeGreaterThan(0);
+
+    const ensureBefore = h.fakes.get("foo")!.ensureSessionCalls;
     const pC = h.pm.dispatch("A", textMsg("A", "u-a", "m3", "after idle"));
     await tick();
     // A fresh session is created before the message is processed.
-    expect(h.fakes.get("foo")!.newSessionCalls).toBe(before + 1);
+    expect(h.fakes.get("foo")!.ensureSessionCalls).toBe(ensureBefore + 1);
 
     h.fakes.get("foo")!.complete("replied");
     await pC;
@@ -125,7 +128,7 @@ describe("ProjectRuntime: W1 fail-closed diagnostics", () => {
     };
 
     class FatalRuntime extends FakeAgentRuntime {
-      override async prompt(): Promise<void> {
+      override async ensureSession(): Promise<void> {
         throw new PiInitializationError("extension load error (bad.ts): boom");
       }
     }
