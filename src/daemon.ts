@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PiSdkHost } from "./pi/sdk-host.js";
 import { createWeixinSendFileExtension } from "./pi/extensions/weixin-send-file.js";
+import { createWeixinSendProgressExtension } from "./pi/extensions/weixin-send-progress.js";
 import { WeixinUIContext } from "./pi/ui-context.js";
 import { AccountManager } from "./accounts/account-manager.js";
 import type { WeixinTransport } from "./weixin/types.js";
@@ -59,6 +60,7 @@ async function createProjectPiRuntime(ctx: ProjectHostFactoryContext): Promise<P
         cwd,
         logger,
       }),
+      createWeixinSendProgressExtension({ interaction, logger }),
     ],
     uiContext: new WeixinUIContext({ interaction, logger }),
   });

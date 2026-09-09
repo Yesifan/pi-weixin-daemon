@@ -8,3 +8,4 @@
 - [`adr/0004-layering-and-dependency-direction.md`](adr/0004-layering-and-dependency-direction.md) —— ADR-0004：分层与依赖方向（PiSdkHost / SessionController / ProjectController，只有 `src/pi/` import SDK）。**✅ Accepted（`0.6.0`）**
 - [`requirements/0003-weixin-slash-session-controls.md`](requirements/0003-weixin-slash-session-controls.md) —— 需求：微信模型、思考强度、恢复、重载和显式 prompt 命令。**✅ 已完成（`0.6.3`，涉及 ADR-0005）**
 - [`adr/0005-weixin-slash-session-controls.md`](adr/0005-weixin-slash-session-controls.md) —— ADR-0005：微信 Slash 会话控制与交互仲裁。**✅ Accepted（`0.6.3`）**
+- [`requirements/0004-weixin-agent-progress-tool.md`](requirements/0004-weixin-agent-progress-tool.md) —— 需求：为长任务提供只回当前发起者的 Agent 中间进度工具。**✅ 已完成（`0.6.4`）**

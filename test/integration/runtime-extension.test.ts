@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PiSdkHost } from "../../src/pi/sdk-host.js";
 import { createWeixinSendFileExtension } from "../../src/pi/extensions/weixin-send-file.js";
+import { createWeixinSendProgressExtension } from "../../src/pi/extensions/weixin-send-progress.js";
 import { createLogger } from "../../src/util/logger.js";
 import { createTmpProject, waitForMarker } from "../helpers/tmp-project.js";
 import { FakeWeixinTransport, makeTurn } from "../helpers/fake-transport.js";
@@ -29,6 +30,13 @@ describe("M3: daemon runtime weixin extension (real SDK)", () => {
           fileSender: { sendFile: (turn, p, caption) => transport.sendFile(turn, p, caption) },
           getCurrentTurn: () => currentTurn,
           cwd: projectDir,
+          logger,
+        }),
+        createWeixinSendProgressExtension({
+          interaction: {
+            getCurrentTurn: () => currentTurn,
+            sendText: (turn, text) => transport.sendText(turn, text),
+          } as never,
           logger,
         }),
       ],

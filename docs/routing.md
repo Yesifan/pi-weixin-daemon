@@ -102,6 +102,8 @@ transport 首先丢弃明确的 BOT/非 USER 记录；该检查发生在项目�
 
 - **成功文本回复**：project 层通过 `broadcastText` 将 agent 最终成功回复广播给项目内
   **所有**参与者（含发起者）。错误、可能不完整的部分输出和 extension warning 只回发起者。
+- **中间进度**：长任务可调用 `weixin_send_progress`，立即向当前 `TurnContext` 发简短进度；
+  它不广播、不进入最终回复文本，且在没有活动 turn 时拒绝发送。
 - **消息互通**：某账号的 sender 发来消息时，同时通知同项目**其他**参与者，
   内容为 "`<该账号name>`: 消息文本"——需求③。
 - **目标来源**：广播 / 互通的目标取自 **参与者注册表**（`ProjectController` 记录每个项目下

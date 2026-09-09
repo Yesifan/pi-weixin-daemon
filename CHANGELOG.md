@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.6.4]
+
+### Added
+
+- daemon 内置 `weixin_send_progress` 工具，允许 Agent 在长任务中向当前微信发起者发送简短中间进度；进度不广播，也不并入最终回复。
+
 ## [0.6.3]
 
 ### Added
