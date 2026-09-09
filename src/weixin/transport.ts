@@ -2,7 +2,7 @@ import type { Logger } from "../util/logger.js";
 import type { InboundMessage, TurnContext, WeixinTransport } from "./types.js";
 import { getConfig, notifyStart, notifyStop, sendTyping as sendTypingApi } from "./api/api.js";
 import { WeixinConfigManager } from "./api/config-cache.js";
-import { TypingStatus, type WeixinMessage } from "./api/types.js";
+import { MessageType, TypingStatus, type WeixinMessage } from "./api/types.js";
 import { resolveWeixinBaseUrl } from "./auth/accounts.js";
 import { downloadAttachmentsFromMessage } from "./media/media-download.js";
 import { sendWeixinMediaFile } from "./messaging/send-media.js";
@@ -176,6 +176,22 @@ export class ILinkWeixinTransport implements WeixinTransport {
   }
 
   private async handleInbound(raw: WeixinMessage): Promise<void> {
+    // getUpdates may include bot-originated records. Only user messages are
+    // valid Pi input; reject everything else before project lookup, media
+    // download, context-token persistence, or participant registration.
+    if (raw.message_type !== undefined && raw.message_type !== MessageType.USER) {
+      this.opts.logger.debug(
+        {
+          accountId: this.opts.accountId,
+          messageId: raw.message_id,
+          messageType: raw.message_type,
+          messageState: raw.message_state,
+        },
+        "dropping non-user inbound message",
+      );
+      return;
+    }
+
     // Multi-project gate before media download: when a project inbox resolver is
     // configured and yields no dir, the account is unbound / project disabled —
     // drop the message entirely (never download, never emit into Pi) and tell

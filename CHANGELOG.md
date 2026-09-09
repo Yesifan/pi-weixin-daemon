@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.6.2]
+
+### Fixed
+
+- 在 project gate、媒体下载和消息归一化之前丢弃 iLink 的 BOT/非 USER 入站记录，避免
+  bot 自身消息误入 Pi；为兼容旧报文，缺失 `message_type` 时仍按 USER 处理。
+
 ## [0.6.1]
 
 ### Fixed

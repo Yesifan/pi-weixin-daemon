@@ -138,6 +138,44 @@ describe("ILinkWeixinTransport (mocked api)", () => {
     expect(last.body.status).toBe(TypingStatus.CANCEL);
   });
 
+  it("drops BOT messages before project gate and handler dispatch", async () => {
+    const resolveInboxDir = vi.fn(() => ({ dir: "/unused" }));
+    const t = new ILinkWeixinTransport({
+      accountId: "acct-a",
+      token: "tok",
+      baseUrl: "https://example.com",
+      resolveInboxDir,
+      logger,
+    });
+    await t.start();
+
+    const handler = vi.fn(async () => undefined);
+    t.onMessage(handler);
+    await capturedOnInbound.current!(makeRawMessage({ message_type: 2 }));
+
+    expect(resolveInboxDir).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    expect(apiMocks.sendMessage).not.toHaveBeenCalled();
+    await t.stop();
+  });
+
+  it("keeps accepting legacy messages with no message_type", async () => {
+    const t = new ILinkWeixinTransport({
+      accountId: "acct-a",
+      token: "tok",
+      baseUrl: "https://example.com",
+      logger,
+    });
+    await t.start();
+
+    const handler = vi.fn(async () => undefined);
+    t.onMessage(handler);
+    await capturedOnInbound.current!(makeRawMessage({ message_type: undefined }));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    await t.stop();
+  });
+
   it("forwards normalized inbound messages to handlers and stores context tokens", async () => {
     const t = new ILinkWeixinTransport({
       accountId: "acct-a",
