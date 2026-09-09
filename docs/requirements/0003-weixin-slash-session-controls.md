@@ -18,7 +18,7 @@
 
 ### 交互
 
-- 选项绑定发起者的 `accountId + senderId`，有效期 30 秒。
+- 选项绑定发起者的 `accountId + senderId`；连续 30 秒无操作后超时，翻页和无效输入会重新计时。
 - 支持字母选择、数字页码和 `q` 退出。
 - Pi UI ask 优先，slash selector 不消费其回复。
 - 只有 `/resume` selector 阻塞项目；其他账号此时收到项目正在选择恢复会话的提示。

@@ -21,6 +21,7 @@ export class FakeAgentRuntime implements SessionRuntimePort {
   ensureSessionCalls = 0;
   stopCalls = 0;
   activeSession = false;
+  models: HostModelOption[] = [{ provider: "fake", id: "provider", name: "Fake" }];
   selectedModels: Array<{ provider: string; id: string; projectDefault: boolean }> = [];
   selectedThinking: Array<{ level: string; projectDefault: boolean }> = [];
   sessions: HostSessionOption[] = [];
@@ -125,7 +126,7 @@ export class FakeAgentRuntime implements SessionRuntimePort {
   }
 
   async listModels(): Promise<HostModelOption[]> {
-    return [{ provider: "fake", id: "provider", name: "Fake" }];
+    return this.models;
   }
   async setModel(provider: string, id: string, projectDefault: boolean): Promise<void> {
     this.selectedModels.push({ provider, id, projectDefault });

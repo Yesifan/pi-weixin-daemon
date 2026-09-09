@@ -17,6 +17,7 @@ function setup(opts: {
   runtime?: FakeAgentRuntime;
   turnTimeoutMs?: number;
   abortGraceMs?: number;
+  slashInteractionTimeoutMs?: number;
 } = {}) {
   const runtime = opts.runtime ?? new FakeAgentRuntime();
   const transport = new FakeWeixinTransport();
@@ -37,6 +38,7 @@ function setup(opts: {
     resolveSenderLabel: opts.senderLabel as never,
     turnTimeoutMs: opts.turnTimeoutMs,
     abortGraceMs: opts.abortGraceMs,
+    slashInteractionTimeoutMs: opts.slashInteractionTimeoutMs,
   });
   return { runtime, transport, session };
 }
@@ -236,10 +238,27 @@ describe("slash selectors", () => {
     await session.start();
 
     await session.handleCommand("model", "", msgA("/model"));
+    expect(transport.textsTo("acct-a")[0]).toContain("**当前设置**");
+    expect(transport.textsTo("acct-a")[0]).toContain("- 模型：fake/provider");
+    expect(transport.textsTo("acct-a")[0]).toContain("- 思考强度：medium");
+    expect(transport.textsTo("acct-a")[0]).toContain("- **a.** fake/provider (Fake)");
     expect(transport.textsTo("acct-a")[0]).toContain("选择将切换该项目的默认模型");
     await session.handleUserMessage(msgA("a", "choose-model"));
 
     expect(runtime.selectedModels).toEqual([{ provider: "fake", id: "provider", projectDefault: true }]);
+  });
+
+  it("thinking selector shows the current model and thinking level", async () => {
+    const { runtime, transport, session } = setup();
+    await session.start();
+    await runtime.ensureSession();
+
+    await session.handleCommand("thinking", "", msgA("/thinking"));
+    const reply = transport.textsTo("acct-a")[0];
+    expect(reply).toContain("**当前设置**");
+    expect(reply).toContain("- 模型：fake/provider");
+    expect(reply).toContain("- 思考强度：medium");
+    expect(reply).toContain("**选择思考强度**");
   });
 
   it("resume selector blocks another account and restores the selected session", async () => {
@@ -260,6 +279,40 @@ describe("slash selectors", () => {
     await session.handleUserMessage(msgA("a", "choose-resume"));
     expect(runtime.resumeCalls).toEqual(["/fake/old.jsonl"]);
     expect(session.getState()).toBe("ready");
+  });
+
+  it("page changes refresh the selector inactivity timeout", async () => {
+    const runtime = new FakeAgentRuntime();
+    runtime.models = Array.from({ length: 6 }, (_, i) => ({ provider: "fake", id: `m${i}`, name: `M${i}` }));
+    const { transport, session } = setup({ runtime, slashInteractionTimeoutMs: 40 });
+    await session.start();
+
+    await session.handleCommand("model", "", msgA("/model"));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await session.handleUserMessage(msgA("2", "page-model"));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(transport.textsTo("acct-a")).not.toContain("⏱️ 选择已超时，请重新输入命令。");
+
+    await vi.waitFor(
+      () => expect(transport.textsTo("acct-a")).toContain("⏱️ 选择已超时，请重新输入命令。"),
+      { timeout: 100 },
+    );
+  });
+
+  it("invalid input refreshes the selector inactivity timeout", async () => {
+    const { transport, session } = setup({ slashInteractionTimeoutMs: 40 });
+    await session.start();
+
+    await session.handleCommand("model", "", msgA("/model"));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await session.handleUserMessage(msgA("invalid", "invalid-model"));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(transport.textsTo("acct-a")).not.toContain("⏱️ 选择已超时，请重新输入命令。");
+
+    await vi.waitFor(
+      () => expect(transport.textsTo("acct-a")).toContain("⏱️ 选择已超时，请重新输入命令。"),
+      { timeout: 100 },
+    );
   });
 
   it("/resume latest refuses to replace an active session", async () => {

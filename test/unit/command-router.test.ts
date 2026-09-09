@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CommandRouter } from "../../src/projects/command-router.js";
+import { helpText } from "../../src/sessions/commands.js";
 
 const router = new CommandRouter();
 
@@ -10,6 +11,12 @@ describe("CommandRouter classifier", () => {
     }
     expect(router.classify("/help model")).toEqual({ kind: "daemon-command", command: "help", args: "model" });
     expect(router.classify("/resume latest")).toEqual({ kind: "daemon-command", command: "resume", args: "latest" });
+  });
+
+  it("formats full help as a Markdown list", () => {
+    const help = helpText();
+    expect(help).toContain("**可用命令**\n- `/model`");
+    expect(help).toContain("\n- `/thinking`");
   });
 
   it("classifies explicit /p: input as a prompt", () => {

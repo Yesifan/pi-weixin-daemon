@@ -16,6 +16,8 @@ export const DEFAULT_SESSION_IDLE_MS = 10 * 60 * 1000;
 export const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
 /** Time allowed for Pi to settle after a timeout abort. */
 export const DEFAULT_ABORT_GRACE_MS = 10_000;
+/** Inactivity timeout for a Weixin slash selector. */
+export const DEFAULT_SLASH_INTERACTION_TIMEOUT_MS = 30_000;
 
 export interface SessionControllerDeps {
   projectId: string;
@@ -35,6 +37,8 @@ export interface SessionControllerDeps {
   turnTimeoutMs?: number;
   /** Grace period for Pi to settle after a watchdog abort. */
   abortGraceMs?: number;
+  /** Slash selector inactivity timeout (min for tests). */
+  slashInteractionTimeoutMs?: number;
 }
 
 /**
@@ -384,13 +388,14 @@ export class SessionController {
   private formatStatus(): string {
     const status = this.deps.host.getStatus();
     return [
-      `Project: ${status?.cwd ?? "(runtime not started)"}`,
-      `Session: ${status?.sessionFile ?? "(none)"}`,
-      `Agent state: ${this.state}`,
-      `Model: ${status?.model ?? "unknown"}`,
-      `Thinking: ${status?.thinkingLevel ?? "unknown"}`,
-      `Configured trust: ${status?.configuredTrust ?? "?"}`,
-      `Active session trust: ${status?.activeSessionTrust ?? "(no session)"}`,
+      "**会话状态**",
+      `- Project: ${status?.cwd ?? "(runtime not started)"}`,
+      `- Session: ${status?.sessionFile ?? "(none)"}`,
+      `- Agent state: ${this.state}`,
+      `- Model: ${status?.model ?? "unknown"}`,
+      `- Thinking: ${status?.thinkingLevel ?? "unknown"}`,
+      `- Configured trust: ${status?.configuredTrust ?? "?"}`,
+      `- Active session trust: ${status?.activeSessionTrust ?? "(no session)"}`,
     ].join("\n");
   }
 
@@ -401,28 +406,42 @@ export class SessionController {
   private async openModelSelector(turn: TurnContext): Promise<void> {
     const options = await this.deps.host.listModels();
     if (!options.length) return this.reply(turn, "没有已配置凭据的可用模型。");
-    await this.beginSelector({ kind: "model", turn, page: 0, options });
+    await this.beginSelector({ kind: "model", turn, page: 0, options, timeoutGeneration: 0 });
   }
 
   private async openThinkingSelector(turn: TurnContext): Promise<void> {
     const options = await this.deps.host.getThinkingLevels();
     if (!options.length) return this.reply(turn, "当前模型不支持思考强度设置。");
-    await this.beginSelector({ kind: "thinking", turn, page: 0, options });
+    await this.beginSelector({ kind: "thinking", turn, page: 0, options, timeoutGeneration: 0 });
   }
 
   private async openResumeSelector(turn: TurnContext): Promise<void> {
     const current = this.deps.host.getStatus().sessionFile;
     const options = (await this.deps.host.listSessions()).filter((item) => item.path !== current);
     if (!options.length) return this.reply(turn, "没有其他可恢复的历史会话。");
-    await this.beginSelector({ kind: "resume", turn, page: 0, options });
+    await this.beginSelector({ kind: "resume", turn, page: 0, options, timeoutGeneration: 0 });
   }
 
   private async beginSelector(selector: SlashSelector): Promise<void> {
     this.clearSelector();
-    selector.timer = setTimeout(() => void this.expireSelector(selector), 30_000);
-    selector.timer.unref();
     this.selector = selector;
+    this.refreshSelectorTimeout(selector);
     await this.renderSelector(selector);
+  }
+
+  /** Restart the selector's inactivity window and invalidate queued old timers. */
+  private refreshSelectorTimeout(selector: SlashSelector): void {
+    if (selector.timer) clearTimeout(selector.timer);
+    const generation = ++selector.timeoutGeneration;
+    const timeoutMs = normalizeDuration(
+      this.deps.slashInteractionTimeoutMs,
+      DEFAULT_SLASH_INTERACTION_TIMEOUT_MS,
+    );
+    selector.timer = setTimeout(() => {
+      if (this.selector !== selector || selector.timeoutGeneration !== generation) return;
+      void this.expireSelector(selector);
+    }, timeoutMs);
+    selector.timer.unref();
   }
 
   private async renderSelector(selector: SlashSelector): Promise<void> {
@@ -430,15 +449,26 @@ export class SessionController {
     const pages = Math.max(1, Math.ceil(selector.options.length / pageSize));
     selector.page = Math.min(selector.page, pages - 1);
     const slice = selector.options.slice(selector.page * pageSize, (selector.page + 1) * pageSize);
-    const rows = slice.map((item, i) => `${String.fromCharCode(97 + i)}. ${selectorLabel(item)}`);
-    const page = selector.kind === "thinking" ? "" : `\n页 ${selector.page + 1}/${pages}（回复页码翻页）`;
-    const inactiveHint = selector.kind === "model" && !this.deps.host.hasSession()
-      ? "\n当前没有活动会话，选择将切换该项目的默认模型。"
-      : "";
-    const instruction = selector.kind === "resume"
-      ? "回复字母选择、页码翻页，或 q 退出。"
-      : "回复字母选择、字母 default 设项目默认，或 q 退出。";
-    await this.reply(selector.turn, `${rows.join("\n")}${page}${inactiveHint}\n${instruction}`);
+    const rows = slice.map((item, i) => `- **${String.fromCharCode(97 + i)}.** ${selectorLabel(item)}`);
+    const sections: string[] = [];
+    if (selector.kind === "model" || selector.kind === "thinking") {
+      const status = this.deps.host.getStatus();
+      sections.push(
+        "**当前设置**",
+        `- 模型：${status.model ?? "unknown"}`,
+        `- 思考强度：${status.thinkingLevel ?? "unknown"}`,
+      );
+    }
+    sections.push(selector.kind === "resume" ? "**选择会话**" : selector.kind === "model" ? "**选择模型**" : "**选择思考强度**");
+    sections.push(...rows);
+    if (selector.kind !== "thinking") sections.push(`页 ${selector.page + 1}/${pages}（回复页码翻页）`);
+    if (selector.kind === "model" && !this.deps.host.hasSession()) {
+      sections.push("当前没有活动会话，选择将切换该项目的默认模型。");
+    }
+    sections.push(selector.kind === "resume"
+      ? "回复字母选择、页码翻页，或 `q` 退出。"
+      : "回复字母选择、`字母 default` 设项目默认，或 `q` 退出。");
+    await this.reply(selector.turn, sections.join("\n\n"));
   }
 
   private async handleSelectorInput(input: string): Promise<void> {
@@ -455,14 +485,19 @@ export class SessionController {
       const page = Number(text) - 1;
       if (page >= 0 && page < Math.ceil(selector.options.length / pageSize)) {
         selector.page = page;
+        this.refreshSelectorTimeout(selector);
         await this.renderSelector(selector);
-      } else await this.reply(selector.turn, "没有该页，请回复有效页码或 q 退出。");
+      } else {
+        this.refreshSelectorTimeout(selector);
+        await this.reply(selector.turn, "没有该页，请回复有效页码或 q 退出。");
+      }
       return;
     }
     const match = /^([a-e])(?:\s+(default))?$/.exec(text);
     const index = match ? match[1]!.charCodeAt(0) - 97 : -1;
     const item = selector.options[selector.page * pageSize + index];
     if (!match || !item || index >= pageSize) {
+      this.refreshSelectorTimeout(selector);
       await this.reply(selector.turn, "无法识别，请回复选项字母、页码或 q 退出。");
       return;
     }
@@ -568,10 +603,16 @@ export class SessionController {
 
 type ModelChoice = { provider: string; id: string; name: string };
 type SessionChoice = { path: string; id: string; modifiedAt: number; firstMessage: string; name?: string };
+type SlashSelectorBase = {
+  turn: TurnContext;
+  page: number;
+  timer?: NodeJS.Timeout;
+  timeoutGeneration: number;
+};
 type SlashSelector =
-  | { kind: "model"; turn: TurnContext; page: number; options: ModelChoice[]; timer?: NodeJS.Timeout }
-  | { kind: "thinking"; turn: TurnContext; page: number; options: string[]; timer?: NodeJS.Timeout }
-  | { kind: "resume"; turn: TurnContext; page: number; options: SessionChoice[]; timer?: NodeJS.Timeout };
+  | (SlashSelectorBase & { kind: "model"; options: ModelChoice[] })
+  | (SlashSelectorBase & { kind: "thinking"; options: string[] })
+  | (SlashSelectorBase & { kind: "resume"; options: SessionChoice[] });
 
 function sameOrigin(a: TurnContext, b: TurnContext): boolean {
   return a.accountId === b.accountId && a.senderId === b.senderId;

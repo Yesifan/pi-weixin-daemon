@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.6.6]
+
+### Changed
+
+- `/model` 和 `/thinking` 选择器同时显示当前模型与思考强度。
+- `/help`、`/status` 及选择器改用 Markdown 标题和列表，确保微信正确显示多行内容。
+
+## [0.6.5]
+
+### Fixed
+
+- `/help` 命令列表改用微信可正确渲染的段落换行，避免所有命令挤在同一行。
+
 ## [0.6.4]
 
 ### Added
@@ -19,7 +32,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 - 微信端新增 `/model`、`/thinking`、`/resume [latest]`、`/reload`、`/p:<prompt>` 与
   `/help <command>`。
-- 模型和会话支持每页 5 项的跨消息选择；选择绑定发起者并在 30 秒后主动超时，支持 `q` 退出。
+- 模型和会话支持每页 5 项的跨消息选择；选择绑定发起者并在连续 30 秒无操作后主动超时，翻页或无效输入会重新计时，支持 `q` 退出。
 - 模型与思考强度可写入 Pi 项目 settings，影响后续新会话；历史会话通过 Pi runtime 恢复并重绑扩展。
 
 ### Changed
