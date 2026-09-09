@@ -11,8 +11,14 @@ import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transpo
 
 const logger = createLogger({ level: "silent" });
 
-function setup(opts: { broadcastText?: (t: string) => Promise<void>; senderLabel?: (m: { accountId: string }) => string } = {}) {
-  const runtime = new FakeAgentRuntime();
+function setup(opts: {
+  broadcastText?: (t: string) => Promise<void>;
+  senderLabel?: (m: { accountId: string }) => string;
+  runtime?: FakeAgentRuntime;
+  turnTimeoutMs?: number;
+  abortGraceMs?: number;
+} = {}) {
+  const runtime = opts.runtime ?? new FakeAgentRuntime();
   const transport = new FakeWeixinTransport();
   const currentTurn = new CurrentTurn();
   const interaction = new WeixinInteractionController({
@@ -29,6 +35,8 @@ function setup(opts: { broadcastText?: (t: string) => Promise<void>; senderLabel
     logger,
     broadcastText: opts.broadcastText,
     resolveSenderLabel: opts.senderLabel as never,
+    turnTimeoutMs: opts.turnTimeoutMs,
+    abortGraceMs: opts.abortGraceMs,
   });
   return { runtime, transport, session };
 }
@@ -92,7 +100,7 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
     expect(session.getState()).toBe("ready");
   });
 
-  it("agent error produces an error reply to the turn origin", async () => {
+  it("exceptional prompt rejection produces an error reply to the turn origin", async () => {
     const { runtime, transport, session } = setup();
 
     const turnPromise = session.handleUserMessage(msgA("boom"));
@@ -103,9 +111,75 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
     expect(transport.textsTo("acct-a")[0]).toContain("provider exploded");
     expect(session.getState()).toBe("ready");
   });
+
+  it("Pi protocol error produces an origin-only error reply", async () => {
+    const broadcasts: string[] = [];
+    const { runtime, transport, session } = setup({
+      broadcastText: async (text) => { broadcasts.push(text); },
+    });
+    const turnPromise = session.handleUserMessage(msgA("boom"));
+    await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
+    runtime.completeWithError("quota exceeded", "partial answer");
+    await turnPromise;
+
+    expect(transport.textsTo("acct-a")[0]).toContain("quota exceeded");
+    expect(transport.textsTo("acct-a")[0]).toContain("可能不完整");
+    expect(broadcasts).toEqual([]);
+    expect(session.getState()).toBe("ready");
+  });
+
+  it("does not report a recovered automatic retry as an error", async () => {
+    const { runtime, transport, session } = setup();
+    const turnPromise = session.handleUserMessage(msgA("retry"));
+    await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
+    runtime.failThenRetrySuccessfully("recovered");
+    await turnPromise;
+    expect(transport.textsTo("acct-a")).toEqual(["recovered"]);
+  });
+
+  it("watchdog aborts a timed-out turn and returns to ready", async () => {
+    const { transport, session } = setup({ turnTimeoutMs: 10, abortGraceMs: 20 });
+    await session.handleUserMessage(msgA("hang"));
+    expect(transport.textsTo("acct-a").at(-1)).toContain("运行超时");
+    expect(session.getState()).toBe("ready");
+  });
+
+  it("faults the session when a timed-out Pi run cannot be stopped", async () => {
+    class StuckRuntime extends FakeAgentRuntime {
+      override async abort(): Promise<void> {}
+      override async waitForIdle(): Promise<void> { await new Promise<void>(() => undefined); }
+    }
+    const runtime = new StuckRuntime();
+    const { transport, session } = setup({ runtime, turnTimeoutMs: 5, abortGraceMs: 5 });
+    await session.handleUserMessage(msgA("stuck"));
+    expect(transport.textsTo("acct-a").at(-1)).toContain("未能正常停止");
+    expect(session.getState()).toBe("faulted");
+  });
+
+  it("reports an extension failure to the origin without hiding a successful answer", async () => {
+    const { runtime, transport, session } = setup();
+    const turnPromise = session.handleUserMessage(msgA("extension"));
+    await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
+    runtime.emit({ type: "extension_error", message: "hook exploded", extensionPath: "bad.ts" });
+    runtime.complete("answer");
+    await turnPromise;
+    expect(transport.textsTo("acct-a")).toEqual([
+      "answer",
+      expect.stringContaining("hook exploded"),
+    ]);
+  });
 });
 
 describe("M6 commands over weixin", () => {
+  it("reports command execution failures", async () => {
+    class CompactFailureRuntime extends FakeAgentRuntime {
+      override async compact(): Promise<void> { throw new Error("compact exploded"); }
+    }
+    const { transport, session } = setup({ runtime: new CompactFailureRuntime() });
+    await session.handleCommand("compact", msgA("/compact"));
+    expect(transport.textsTo("acct-a").at(-1)).toContain("compact exploded");
+  });
+
   it("/status works while running", async () => {
     const { runtime, transport, session } = setup();
     const turnPromise = session.handleUserMessage(msgA("task"));

@@ -161,6 +161,12 @@ daemon 通过 Pi SDK 运行模型，需要对应 provider 的凭据。若运行�
 
 > 系统化说明：`pi-wx` 的服务运行在 systemd 下，**不继承 shell 环境变量**。如果你只在 shell 里 `export DEEPSEEK_API_KEY=...`，交互终端可用，但服务里拿不到——必须写到 `auth.json` 或通过 `EnvironmentFile` 注入。
 
+运行可靠性环境变量（同样需要通过 `EnvironmentFile` 注入 systemd 服务）：
+
+- `PI_WEIXIN_TURN_TIMEOUT_MS`：单个 Agent 回合的最长运行时间，默认 `1800000`（30 分钟），`0` 关闭 watchdog。
+- `PI_WEIXIN_ABORT_GRACE_MS`：回合超时并发送 abort 后等待 Pi 停止的时间，默认 `10000`（10 秒），`0` 表示无限等待。
+- `PI_WEIXIN_UI_TIMEOUT_MS`：等待微信 UI/权限答复的时间，默认 5 分钟。
+
 ## 微信内命令
 
 | 命令       | 说明                                          | 忙时可用 |

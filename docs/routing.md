@@ -109,6 +109,20 @@
 
 > 多用户场景（两用户→两账号→一项目）见 [`docs/domain-model.md`](domain-model.md) §1.7。
 
+### Pi 错误与送达失败
+
+- Pi 的 Provider/模型错误通常编码在最终 assistant message 的 `stopReason/errorMessage` 中，
+  不一定让 `prompt()` 抛异常；daemon 会在 `agent_settled` 后检查最终结果并明确回复发起者。
+- 自动重试期间的中间错误不会提前告知；重试最终成功时只发送成功结果。
+- 错误发生前若已有部分输出，会标记“内容可能不完整”，且仅回复当前回合发起者，不广播。
+- 当前回合中的 extension runtime error 会作为警告回复发起者；不相关的后台错误只记日志。
+- Agent 回合默认最多运行 30 分钟，超时后 abort；可用 `PI_WEIXIN_TURN_TIMEOUT_MS`
+  覆盖（毫秒，`0` 表示关闭）。abort 后默认等待 10 秒，可用
+  `PI_WEIXIN_ABORT_GRACE_MS` 覆盖。仍无法停止时 session 进入 faulted 状态。
+- 所有用户可见错误都会清除控制字符、脱敏并截断；原始异常仅写 daemon 日志。
+- 微信发送通道自身失败时无法再通过同一通道告知用户。系统会记录项目、消息、账号及广播
+  成功/失败统计，但不会把送达失败误判为 Pi 项目故障。
+
 ---
 
 ## UI / 权限交互（ask）

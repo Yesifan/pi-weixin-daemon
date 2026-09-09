@@ -46,7 +46,10 @@ export async function sendTextMessage(params: {
   }
   const chunks = splitTextChunks(text);
   let lastMessageId = "";
-  for (const chunk of chunks) {
+  let succeededChunks = 0;
+  opts.logger?.debug({ to, chunkCount: chunks.length, totalLength: text.length }, "sending weixin text");
+  for (const [chunkOffset, chunk] of chunks.entries()) {
+    const chunkIndex = chunkOffset + 1;
     const clientId = generateId("pi-weixin-daemon");
     const req: SendMessageReq = {
       msg: {
@@ -69,14 +72,29 @@ export async function sendTextMessage(params: {
       });
     } catch (err) {
       opts.logger?.error(
-        `sendTextMessage: failed to=${to} clientId=${clientId} chunk=${chunks.length > 1 ? `${chunk.length} chars` : "single"} err=${String(err)}`,
+        {
+          err,
+          to,
+          clientId,
+          chunkIndex,
+          chunkCount: chunks.length,
+          chunkLength: chunk.length,
+          succeededChunks,
+          remainingChunks: chunks.length - chunkIndex,
+        },
+        "weixin text chunk delivery failed",
       );
       throw err;
     }
+    succeededChunks += 1;
     lastMessageId = clientId;
+    opts.logger?.debug(
+      { to, clientId, chunkIndex, chunkCount: chunks.length, chunkLength: chunk.length },
+      "weixin text chunk sent",
+    );
   }
   if (chunks.length > 1) {
-    opts.logger?.info(`sendTextMessage: sent ${chunks.length} chunks to=${to}`);
+    opts.logger?.info({ to, chunkCount: chunks.length, totalLength: text.length }, "weixin text chunks sent");
   }
   return { messageId: lastMessageId };
 }

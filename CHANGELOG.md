@@ -7,6 +7,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.6.1]
+
+### Fixed
+
+- Pi Provider/模型错误现在从最终 assistant message 的 `stopReason/errorMessage` 提取并回复
+  当前微信发起者；自动重试成功不会误报中间错误，部分输出失败会明确标记为不完整。
+- daemon 命令、项目消息处理和 idle 自动关闭增加错误边界，不再只记录日志后静默返回。
+- Agent 回合增加 watchdog 和 abort grace，避免 Pi 卡死后项目永久停留在 busy。
+
+### Added
+
+- 当前回合的 Pi extension runtime error 会作为非致命警告告知发起者。
+- 用户可见错误统一进行控制字符清理、凭据脱敏和长度限制。
+- 项目广播增加送达统计，微信长文本分片增加不含正文的结构化进度/失败日志。
+- 新增 `PI_WEIXIN_TURN_TIMEOUT_MS` 与 `PI_WEIXIN_ABORT_GRACE_MS` 配置。
+
+### Changed
+
+- Agent 错误及其部分输出只回复当前回合发起者，不再广播给项目其他参与者；微信送达失败
+  与 Pi runtime 故障分开处理。
+
 ## [0.6.0]
 
 ### BREAKING CHANGES

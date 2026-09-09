@@ -6,10 +6,16 @@ import { helpText, type DaemonCommand } from "./commands.js";
 import { buildPromptInput } from "./prompt.js";
 import { ResponseAccumulator } from "./response-accumulator.js";
 import { BUSY_REPLY, type SessionState } from "./session-state.js";
+import type { DeliveryReport, TurnIssue, TurnOutcome } from "./turn-outcome.js";
 import { CurrentTurn, toTurnContext } from "./turn-context.js";
+import { formatUserFacingError } from "../util/user-facing-error.js";
 
 /** Default auto-close idle window for a shared session (10 minutes). */
 export const DEFAULT_SESSION_IDLE_MS = 10 * 60 * 1000;
+/** Maximum turn duration before aborting Pi (30 minutes). */
+export const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
+/** Time allowed for Pi to settle after a timeout abort. */
+export const DEFAULT_ABORT_GRACE_MS = 10_000;
 
 export interface SessionControllerDeps {
   projectId: string;
@@ -22,9 +28,13 @@ export interface SessionControllerDeps {
   /** Idle window before the session is disposed (min for tests). */
   sessionIdleMs?: number;
   /** Broadcast a turn's final reply / idle-close notice to all participants. */
-  broadcastText?: (text: string) => Promise<void>;
+  broadcastText?: (text: string) => Promise<DeliveryReport | void>;
   /** Human label for an inbound sender (used in "-- from weixin <name>"). */
   resolveSenderLabel?: (msg: InboundMessage) => string;
+  /** Maximum duration of one Pi turn; 0 disables the watchdog. */
+  turnTimeoutMs?: number;
+  /** Grace period for Pi to settle after a watchdog abort. */
+  abortGraceMs?: number;
 }
 
 /**
@@ -48,6 +58,10 @@ export class SessionController {
 
   getCurrentTurn(): TurnContext | undefined {
     return this.deps.currentTurn.get();
+  }
+
+  getFault(): string | undefined {
+    return this.error;
   }
 
   getStatus() {
@@ -76,9 +90,18 @@ export class SessionController {
     this.scheduleIdleCheck();
 
     const turn = toTurnContext(msg);
-    const log = this.deps.logger;
-    log.info({ command, accountId: msg.accountId }, "command");
+    this.deps.logger.info({ command, accountId: msg.accountId, messageId: msg.messageId }, "command");
+    try {
+      await this.executeCommand(command, turn);
+    } catch (err) {
+      this.deps.logger.error({ err, command, project: this.deps.projectId }, "command execution failed");
+      // A failed outbound send cannot be reported over the same failed channel;
+      // let that second failure reach the project boundary for structured logging.
+      await this.reply(turn, `⚠️ 命令 /${command} 执行失败：${formatUserFacingError(err)}`);
+    }
+  }
 
+  private async executeCommand(command: DaemonCommand, turn: TurnContext): Promise<void> {
     switch (command) {
       case "help":
         await this.reply(turn, helpText());
@@ -107,11 +130,10 @@ export class SessionController {
         try {
           const result = await this.deps.host.newSession();
           this.state = "ready";
-          // Transparent {cancelled} (W3): a session_before_switch handler may cancel.
           await this.reply(turn, result.cancelled ? "⚠️ 已取消新建会话。" : "✅ 已新建会话。");
         } catch (err) {
           this.state = "faulted";
-          this.error = err instanceof Error ? err.message : String(err);
+          this.error = formatUserFacingError(err);
           await this.reply(turn, `⚠️ 新建会话失败：${this.error}`);
         }
         return;
@@ -163,7 +185,7 @@ export class SessionController {
         this.state = "ready";
       } catch (err) {
         this.state = "faulted";
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = formatUserFacingError(err);
         this.deps.logger.error({ err, project: this.deps.projectId }, "session creation failed");
         await this.reply(turn, `⚠️ 项目启动失败，已拒绝消息：${this.error}`);
         return;
@@ -177,39 +199,112 @@ export class SessionController {
     const turn = toTurnContext(msg);
     this.deps.currentTurn.set(turn);
     this.state = "busy";
+    let nextState: SessionState = "ready";
 
     try {
       await this.deps.transport.setTyping(turn, true);
-
       const accumulator = new ResponseAccumulator();
       const unsubscribe = this.deps.host.onEvent((event) => accumulator.handleEvent(event));
+      let outcome: TurnOutcome;
 
-      let finalText: string;
       try {
-        await this.deps.host.prompt(buildPromptInput(msg, this.deps.resolveSenderLabel?.(msg)));
-        // agent_settled may arrive just after prompt() resolves; wait for it.
-        await accumulator.settled;
-        finalText = accumulator.accumulatedText.trim();
+        const operation = (async () => {
+          await this.deps.host.prompt(buildPromptInput(msg, this.deps.resolveSenderLabel?.(msg)));
+          await accumulator.settled;
+        })();
+        // Avoid an unhandled rejection if a hard timeout returns before a stuck
+        // provider operation eventually rejects.
+        void operation.catch(() => undefined);
+        await withTimeout(operation, this.turnTimeoutMs(), "turn");
+        outcome = accumulator.getOutcome();
       } catch (err) {
-        this.deps.logger.warn({ err }, "agent run failed");
-        finalText = describeRunError(err);
+        if (err instanceof TurnTimeoutError) {
+          const stopped = await this.abortTimedOutTurn();
+          if (!stopped) {
+            nextState = "faulted";
+            this.error = "Agent 运行超时且未能正常停止";
+          }
+          outcome = {
+            status: "error",
+            text: "",
+            error: { source: "timeout", message: this.error ?? "任务已中止，请重试" },
+            warnings: [],
+          };
+          this.deps.logger.error(
+            { project: this.deps.projectId, messageId: msg.messageId, stopped },
+            "agent turn timed out",
+          );
+        } else {
+          this.deps.logger.warn({ err, project: this.deps.projectId, messageId: msg.messageId }, "agent run failed");
+          outcome = {
+            status: "error",
+            text: accumulator.accumulatedText.trim(),
+            error: { source: "pi", message: formatUserFacingError(err) },
+            warnings: [],
+          };
+        }
       } finally {
         unsubscribe();
       }
 
       await this.deps.transport.setTyping(turn, false);
-
-      if (finalText) {
-        if (this.deps.broadcastText) {
-          await this.deps.broadcastText(finalText);
-        } else {
-          await this.deps.transport.sendText(turn, finalText);
-        }
-      }
+      await this.deliverOutcome(turn, outcome, msg.messageId);
     } finally {
       this.deps.interaction.cancelUiWaiters("turn ended");
-      this.state = "ready";
+      this.state = nextState;
       this.deps.currentTurn.set(undefined);
+    }
+  }
+
+  private async deliverOutcome(turn: TurnContext, outcome: TurnOutcome, messageId: string): Promise<void> {
+    if (outcome.status === "success") {
+      if (outcome.text) {
+        if (this.deps.broadcastText) {
+          const report = await this.deps.broadcastText(outcome.text);
+          if (report && report.failed > 0) {
+            this.deps.logger[report.succeeded === 0 ? "error" : "warn"](
+              { project: this.deps.projectId, messageId, ...report },
+              "agent reply broadcast delivery incomplete",
+            );
+          }
+        } else {
+          await this.reply(turn, outcome.text);
+        }
+      }
+      if (outcome.warnings.length > 0) await this.reply(turn, formatWarnings(outcome.warnings));
+      return;
+    }
+
+    if (outcome.status === "aborted") {
+      const suffix = outcome.text ? "\n\n⏹ 任务已中止，上述内容可能不完整。" : "⏹ 已中止。";
+      await this.reply(turn, `${outcome.text}${suffix}`);
+      return;
+    }
+
+    const reason = formatUserFacingError(outcome.error.message);
+    const prefix = outcome.text ? `${outcome.text}\n\n⚠️ 上述内容可能不完整。` : "⚠️";
+    const label = outcome.error.source === "timeout" ? "Agent 运行超时" : "Agent 运行出错";
+    await this.reply(turn, `${prefix} ${label}：${reason}`);
+  }
+
+  private turnTimeoutMs(): number {
+    return normalizeDuration(this.deps.turnTimeoutMs, DEFAULT_TURN_TIMEOUT_MS);
+  }
+
+  private async abortTimedOutTurn(): Promise<boolean> {
+    try {
+      await withTimeout(
+        (async () => {
+          await this.deps.host.abort();
+          await this.deps.host.waitForIdle();
+        })(),
+        normalizeDuration(this.deps.abortGraceMs, DEFAULT_ABORT_GRACE_MS),
+        "abort",
+      );
+      return true;
+    } catch (err) {
+      this.deps.logger.error({ err, project: this.deps.projectId }, "timed-out agent did not stop");
+      return false;
     }
   }
 
@@ -256,20 +351,60 @@ export class SessionController {
 
     // Real dispose: the SDK runtime is torn down; the wrapper/bridge/participants
     // survive. The next message rebuilds a fresh session (new sessionId).
-    await this.deps.host.stop();
-    this.state = "inactive";
-    this.deps.logger.info({ project: this.deps.projectId }, "session auto-closed (idle)");
-    if (this.deps.broadcastText) {
-      await this.deps.broadcastText("本次会话已关闭").catch((err: unknown) =>
-        this.deps.logger.warn({ err, project: this.deps.projectId }, "idle close broadcast failed"),
+    this.state = "replacing";
+    try {
+      await withTimeout(
+        this.deps.host.stop(),
+        normalizeDuration(this.deps.abortGraceMs, DEFAULT_ABORT_GRACE_MS),
+        "idle close",
       );
+      this.state = "inactive";
+      this.deps.logger.info({ project: this.deps.projectId }, "session auto-closed (idle)");
+      if (this.deps.broadcastText) {
+        await this.deps.broadcastText("本次会话已关闭").catch((err: unknown) =>
+          this.deps.logger.warn({ err, project: this.deps.projectId }, "idle close broadcast failed"),
+        );
+      }
+    } catch (err) {
+      this.state = "faulted";
+      this.error = formatUserFacingError(err);
+      this.deps.logger.error({ err, project: this.deps.projectId }, "session auto-close failed");
+      if (this.deps.broadcastText) {
+        await this.deps.broadcastText(`⚠️ 会话自动关闭失败：${this.error}`).catch((sendErr: unknown) =>
+          this.deps.logger.error({ err: sendErr, project: this.deps.projectId }, "idle-close error broadcast failed"),
+        );
+      }
     }
   }
 }
 
-function describeRunError(err: unknown): string {
-  if (err instanceof Error && /abort|cancel/i.test(`${err.name} ${err.message}`)) {
-    return "⏹ 已中止。";
+class TurnTimeoutError extends Error {
+  constructor(label: string) {
+    super(`${label} timed out`);
+    this.name = "TurnTimeoutError";
   }
-  return `⚠️ Agent 运行出错：${err instanceof Error ? err.message : String(err)}`;
+}
+
+function normalizeDuration(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (timeoutMs === 0) return promise;
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new TurnTimeoutError(label)), timeoutMs);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function formatWarnings(warnings: TurnIssue[]): string {
+  const messages = warnings.map((warning) => formatUserFacingError(warning.message));
+  return `⚠️ 本轮有 Pi 扩展运行异常：${messages.join("；")}`;
 }

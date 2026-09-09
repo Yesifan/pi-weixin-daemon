@@ -17,6 +17,7 @@ export class FakeAgentRuntime implements SessionRuntimePort {
   private pending:
     | { resolve: () => void; reject: (err: Error) => void }
     | undefined;
+  private idleWaiters: Array<() => void> = [];
 
   constructor(cwd = "/fake/project") {
     this.cwd = cwd;
@@ -36,30 +37,70 @@ export class FakeAgentRuntime implements SessionRuntimePort {
 
   async prompt(input: HostPromptInput): Promise<void> {
     this.prompts.push({ text: input.text, images: input.images });
+    this.emit({ type: "assistant_started" });
     await new Promise<void>((resolve, reject) => {
       this.pending = { resolve, reject };
     });
   }
 
-  /** Complete the current prompt: emit text deltas + agent_settled, resolve. */
+  /** Complete the current prompt: emit text deltas + final status + settled. */
   complete(reply: string): void {
-    const chunks = reply.match(/.{1,10}/gs) ?? [reply];
-    for (const delta of chunks) {
-      this.emit({ type: "text_delta", delta });
-    }
-    this.emit({ type: "agent_settled" });
-    this.pending?.resolve();
-    this.pending = undefined;
+    this.emitText(reply);
+    this.emit({ type: "assistant_finished", stopReason: "stop" });
+    this.settle();
   }
 
-  /** Fail the current prompt with an error. */
+  completeWithError(message: string, partialText = ""): void {
+    this.emitText(partialText);
+    this.emit({ type: "assistant_finished", stopReason: "error", errorMessage: message });
+    this.settle();
+  }
+
+  completeAborted(partialText = ""): void {
+    this.emitText(partialText);
+    this.emit({ type: "assistant_finished", stopReason: "aborted", errorMessage: "aborted" });
+    this.settle();
+  }
+
+  failThenRetrySuccessfully(reply: string): void {
+    this.emitText("failed partial");
+    this.emit({ type: "assistant_finished", stopReason: "error", errorMessage: "temporary failure" });
+    this.emit({ type: "assistant_started" });
+    this.emitText(reply);
+    this.emit({ type: "assistant_finished", stopReason: "stop" });
+    this.settle();
+  }
+
+  /** Fail the current prompt with an exceptional rejection. */
   fail(err: Error): void {
     this.pending?.reject(err);
     this.pending = undefined;
+    this.resolveIdleWaiters();
   }
 
   async abort(): Promise<void> {
-    this.fail(new Error("aborted by /abort"));
+    this.completeAborted();
+  }
+
+  async waitForIdle(): Promise<void> {
+    if (!this.pending) return;
+    await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
+  }
+
+  private emitText(text: string): void {
+    const chunks = text.match(/.{1,10}/gs) ?? [];
+    for (const delta of chunks) this.emit({ type: "text_delta", delta });
+  }
+
+  private settle(): void {
+    this.emit({ type: "agent_settled" });
+    this.pending?.resolve();
+    this.pending = undefined;
+    this.resolveIdleWaiters();
+  }
+
+  private resolveIdleWaiters(): void {
+    for (const resolve of this.idleWaiters.splice(0)) resolve();
   }
 
   async newSession(): Promise<SessionSwitchResult> {

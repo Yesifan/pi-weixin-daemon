@@ -15,6 +15,9 @@ export interface ProjectManagerOptions {
   resolveSenderName?: (accountId: string) => string;
   /** Idle window before a shared session auto-closes (passed through). */
   sessionIdleMs?: number;
+  /** Turn watchdog settings (passed through). */
+  turnTimeoutMs?: number;
+  abortGraceMs?: number;
 }
 
 /** Result of a desired-state reconcile (ADR-0004 Invariant 3). */
@@ -93,6 +96,8 @@ export class ProjectManager {
         factory: this.opts.factory,
         resolveSenderName: this.opts.resolveSenderName,
         sessionIdleMs: this.opts.sessionIdleMs,
+        turnTimeoutMs: this.opts.turnTimeoutMs,
+        abortGraceMs: this.opts.abortGraceMs,
       });
       this.controllers.set(name, controller);
       try {

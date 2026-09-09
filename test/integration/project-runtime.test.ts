@@ -84,6 +84,36 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
     expect(h.transports.get("B")!.textsTo("B")).toContain("final answer");
   });
 
+  it("keeps the Pi project healthy when one broadcast delivery fails", async () => {
+    class FailingTransport extends FakeWeixinTransport {
+      override async sendText(): Promise<void> { throw new Error("weixin unavailable"); }
+    }
+    const transports = new Map<string, FakeWeixinTransport>([
+      ["A", new FailingTransport()],
+      ["B", new FakeWeixinTransport()],
+    ]);
+    const runtime = new FakeAgentRuntime("/fake/foo");
+    const pm = new ProjectManager({
+      getTransport: (id) => transports.get(id),
+      factory: async () => runtime,
+      logger,
+    });
+    await pm.sync(fooConfig as never);
+
+    const pB = pm.dispatch("B", textMsg("B", "u-b", "m1", "register"));
+    await tick();
+    runtime.complete("");
+    await pB;
+
+    const pA = pm.dispatch("A", textMsg("A", "u-a", "m2", "hello"));
+    await tick();
+    runtime.complete("answer");
+    await pA;
+
+    expect(transports.get("B")!.textsTo("B")).toContain("answer");
+    expect(pm.getRuntime("foo")!.getStatus().state).toBe("idle");
+  });
+
   it("unknown /bar is refused with a hint (W4), never treated as a message", async () => {
     const h = setup();
     await h.pm.sync(fooConfig as never);

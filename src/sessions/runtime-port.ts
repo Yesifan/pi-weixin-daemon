@@ -18,6 +18,8 @@ export interface SessionRuntimePort {
   ensureSession(): Promise<void>;
   prompt(input: HostPromptInput): Promise<void>;
   abort(): Promise<void>;
+  /** Wait until the active Pi run and its event handlers have fully settled. */
+  waitForIdle(): Promise<void>;
   newSession(): Promise<SessionSwitchResult>;
   compact(customInstructions?: string): Promise<void>;
   onEvent(listener: (event: PiHostEvent) => void): () => void;

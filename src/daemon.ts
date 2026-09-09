@@ -66,6 +66,13 @@ async function createProjectPiRuntime(ctx: ProjectHostFactoryContext): Promise<P
 
 const defaultProjectPiFactory: ProjectHostFactory = (ctx) => createProjectPiRuntime(ctx);
 
+function envDuration(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 /**
  * pi-weixin-daemon composition root (one long-running daemon, many projects).
  *
@@ -99,6 +106,8 @@ export class Daemon {
       factory: deps.projectPiFactory ?? defaultProjectPiFactory,
       logger,
       resolveSenderName: (id) => resolveWeixinAccountName(id) ?? id,
+      turnTimeoutMs: envDuration("PI_WEIXIN_TURN_TIMEOUT_MS"),
+      abortGraceMs: envDuration("PI_WEIXIN_ABORT_GRACE_MS"),
     });
     this.accountTransport =
       deps.getAccountTransport ??

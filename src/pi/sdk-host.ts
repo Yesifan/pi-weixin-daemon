@@ -91,6 +91,15 @@ export class PiSdkHost {
       uiContext: this.opts.uiContext,
       mode: this.opts.mode ?? "rpc",
       logger,
+      onError: (error) => {
+        const message = error.error instanceof Error ? error.error.message : String(error.error);
+        this.emit({
+          type: "extension_error",
+          message,
+          extensionPath: error.extensionPath,
+          event: error.event,
+        });
+      },
     });
 
     // Official hook: called automatically after newSession/switchSession/fork
@@ -115,12 +124,13 @@ export class PiSdkHost {
       await this.extensionHost.bind(session, runtime);
     }
     this.unsubscribe = session.subscribe((event) => {
-      const domain = toPiHostEvent(event);
-      for (const listener of this.listeners) {
-        listener(domain);
-      }
+      this.emit(toPiHostEvent(event));
     });
     this.opts.logger.debug({ sessionFile: session.sessionFile }, "session bound");
+  }
+
+  private emit(event: PiHostEvent): void {
+    for (const listener of this.listeners) listener(event);
   }
 
   /** Subscribe to domain session events. Returns an unsubscribe function. */
@@ -144,6 +154,10 @@ export class PiSdkHost {
     if (!session) return;
     this.opts.logger.info("abort requested");
     await session.abort();
+  }
+
+  async waitForIdle(): Promise<void> {
+    await this.sessionRef?.waitForIdle();
   }
 
   /** Reset the active session. `/new` only resets an existing session. */

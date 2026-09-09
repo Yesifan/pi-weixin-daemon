@@ -6,10 +6,18 @@ import type {
 import type { Logger } from "../util/logger.js";
 import type { HostExtensionMode, SessionSwitchResult } from "./types.js";
 
+export interface ExtensionRuntimeFailure {
+  extensionPath?: string;
+  event?: string;
+  stack?: string;
+  error: unknown;
+}
+
 export interface PiExtensionHostDeps {
   uiContext?: ExtensionUIContext;
   mode: HostExtensionMode;
   logger: Logger;
+  onError?: (error: ExtensionRuntimeFailure) => void;
 }
 
 /**
@@ -52,11 +60,13 @@ export class PiExtensionHost {
         },
         reload: () => session.reload(),
       },
-      onError: (error) =>
+      onError: (error) => {
         this.deps.logger.error(
           { extension: error.extensionPath, event: error.event, stack: error.stack, error: error.error },
           "extension runtime error",
-        ),
+        );
+        this.deps.onError?.(error);
+      },
     });
   }
 }

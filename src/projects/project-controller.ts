@@ -8,10 +8,13 @@ import type {
   WeixinTransport,
 } from "../weixin/types.js";
 import type { Logger } from "../util/logger.js";
+import { formatUserFacingError } from "../util/user-facing-error.js";
+import type { DeliveryReport } from "../sessions/turn-outcome.js";
 import { CommandRouter } from "./command-router.js";
 import { ParticipantRegistry, type Participant } from "./participant-registry.js";
 import type { ProjectRuntimeConfig } from "./project-config.js";
 import type { ProjectRuntimeState } from "./types.js";
+import { OutboundDeliveryError } from "./project-transport.js";
 
 /** Factory builds the per-project agent host (real PiSdkHost, or a fake in tests). */
 export interface ProjectHostFactoryContext {
@@ -34,6 +37,9 @@ export interface ProjectControllerOptions {
   resolveSenderName?: (accountId: string) => string;
   /** Idle window before the shared session is auto-closed (min for tests). */
   sessionIdleMs?: number;
+  /** Maximum duration and abort grace for one Pi turn. */
+  turnTimeoutMs?: number;
+  abortGraceMs?: number;
 }
 
 export interface ProjectStatusView {
@@ -100,6 +106,8 @@ export class ProjectController {
         currentTurn,
         logger: this.opts.logger,
         sessionIdleMs: this.opts.sessionIdleMs,
+        turnTimeoutMs: this.opts.turnTimeoutMs,
+        abortGraceMs: this.opts.abortGraceMs,
         broadcastText: (text) => this.broadcastToRegistry(text),
         resolveSenderLabel: (msg) => this.opts.resolveSenderName?.(msg.accountId) ?? msg.accountId,
       });
@@ -108,7 +116,7 @@ export class ProjectController {
       this.opts.logger.info({ project: this.projectId, cwd: this.config.cwd }, "project controller started");
     } catch (err) {
       this.state = "error";
-      this.error = err instanceof Error ? err.message : String(err);
+      this.error = formatUserFacingError(err);
       this.opts.logger.error({ err, project: this.projectId }, "project controller start failed");
       throw err;
     } finally {
@@ -137,38 +145,56 @@ export class ProjectController {
       return;
     }
 
-    const session = this.requireSession();
+    let session: SessionController | undefined;
     const routed = this.router.classify(msg.text);
 
-    // W4: only the daemon's explicitly-mapped commands enter slash handling.
-    if (routed.kind === "daemon-command") {
-      await session.handleCommand(routed.command, msg);
-      this.reflectState(session);
-      return;
-    }
-    if (routed.kind === "unknown-command") {
-      await this.opts.transport
-        .sendText(toTurnContext(msg), `未知命令 /${routed.text}，输入 /help 查看可用命令。`)
-        .catch((err: unknown) => this.opts.logger.warn({ err, project: this.projectId }, "unknown-command reply failed"));
-      return;
-    }
-
-    // ③ Notify other project participants when a sender speaks (ordinary messages only).
-    await this.notifyOthers(msg).catch((err: unknown) =>
-      this.opts.logger.warn({ err, project: this.projectId }, "notify others failed"),
-    );
-
     try {
-      await session.handleUserMessage(msg);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.opts.logger.warn({ err, project: this.projectId }, "project message handling error");
-      this.state = "error";
-      this.error = message;
-      return;
-    }
+      session = this.requireSession();
+      // W4: only the daemon's explicitly-mapped commands enter slash handling.
+      if (routed.kind === "daemon-command") {
+        await session.handleCommand(routed.command, msg);
+        this.reflectState(session);
+        return;
+      }
+      if (routed.kind === "unknown-command") {
+        await this.opts.transport.sendText(
+          toTurnContext(msg),
+          `未知命令 /${routed.text}，输入 /help 查看可用命令。`,
+        );
+        return;
+      }
 
-    this.reflectState(session);
+      // ③ Notify other project participants when a sender speaks (ordinary messages only).
+      await this.notifyOthers(msg).catch((err: unknown) =>
+        this.opts.logger.warn({ err, project: this.projectId, messageId: msg.messageId }, "notify others failed"),
+      );
+      await session.handleUserMessage(msg);
+      this.reflectState(session);
+    } catch (err) {
+      if (err instanceof OutboundDeliveryError) {
+        this.opts.logger.error(
+          { err, project: this.projectId, account: msg.accountId, messageId: msg.messageId },
+          "outbound delivery failed; cannot notify user over the failed channel",
+        );
+        if (session) this.reflectState(session);
+        return;
+      }
+
+      this.error = formatUserFacingError(err);
+      this.state = "error";
+      this.opts.logger.error(
+        { err, project: this.projectId, account: msg.accountId, messageId: msg.messageId },
+        "project message handling failed",
+      );
+      await this.opts.transport
+        .sendText(toTurnContext(msg), `⚠️ 消息处理失败：${this.error}`)
+        .catch((sendErr: unknown) =>
+          this.opts.logger.error(
+            { err: sendErr, project: this.projectId, account: msg.accountId, messageId: msg.messageId },
+            "unexpected-error reply delivery failed",
+          ),
+        );
+    }
   }
 
   async stop(): Promise<void> {
@@ -213,7 +239,7 @@ export class ProjectController {
     if (s === "busy" || s === "replacing") this.state = "busy";
     else if (s === "faulted") {
       this.state = "error";
-      this.error = this.error ?? "session faulted";
+      this.error = session.getFault() ?? this.error ?? "session faulted";
     } else this.state = "idle";
   }
 
@@ -233,15 +259,28 @@ export class ProjectController {
   }
 
   /** ④ Broadcast the agent's final reply to every authorized participant. */
-  private readonly broadcastToRegistry = async (text: string): Promise<void> => {
-    for (const p of this.broadcastTargets()) {
-      await this.sendTo(p, text).catch((err: unknown) =>
+  private readonly broadcastToRegistry = async (text: string): Promise<DeliveryReport> => {
+    const targets = this.broadcastTargets();
+    const report: DeliveryReport = {
+      attempted: targets.length,
+      succeeded: 0,
+      failed: 0,
+      failedAccounts: [],
+    };
+    for (const p of targets) {
+      try {
+        await this.sendTo(p, text);
+        report.succeeded += 1;
+      } catch (err) {
+        report.failed += 1;
+        report.failedAccounts.push(p.accountId);
         this.opts.logger.warn(
-          { err, account: p.accountId, sender: p.senderId },
+          { err, project: this.projectId, account: p.accountId, sender: p.senderId },
           "broadcast to participant failed",
-        ),
-      );
+        );
+      }
     }
+    return report;
   };
 
   /** ③ Notify every other authorized participant that a sender spoke. */
