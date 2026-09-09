@@ -1,5 +1,12 @@
 import type { PiHostEvent } from "../../src/pi/events.js";
-import type { HostImage, HostPromptInput, HostStatus, SessionSwitchResult } from "../../src/pi/types.js";
+import type {
+  HostImage,
+  HostModelOption,
+  HostPromptInput,
+  HostSessionOption,
+  HostStatus,
+  SessionSwitchResult,
+} from "../../src/pi/types.js";
 import type { SessionRuntimePort } from "../../src/sessions/runtime-port.js";
 
 /**
@@ -13,6 +20,12 @@ export class FakeAgentRuntime implements SessionRuntimePort {
   compactCalls = 0;
   ensureSessionCalls = 0;
   stopCalls = 0;
+  activeSession = false;
+  selectedModels: Array<{ provider: string; id: string; projectDefault: boolean }> = [];
+  selectedThinking: Array<{ level: string; projectDefault: boolean }> = [];
+  sessions: HostSessionOption[] = [];
+  resumeCalls: string[] = [];
+  reloadCalls = 0;
   private listeners = new Set<(event: PiHostEvent) => void>();
   private pending:
     | { resolve: () => void; reject: (err: Error) => void }
@@ -26,13 +39,15 @@ export class FakeAgentRuntime implements SessionRuntimePort {
   async start(): Promise<void> {}
   async stop(): Promise<void> {
     this.stopCalls += 1;
+    this.activeSession = false;
   }
   async ensureSession(): Promise<void> {
     this.ensureSessionCalls += 1;
+    this.activeSession = true;
   }
 
   hasSession(): boolean {
-    return true;
+    return this.activeSession;
   }
 
   async prompt(input: HostPromptInput): Promise<void> {
@@ -105,7 +120,33 @@ export class FakeAgentRuntime implements SessionRuntimePort {
 
   async newSession(): Promise<SessionSwitchResult> {
     this.newSessionCalls += 1;
+    this.activeSession = true;
     return { cancelled: false };
+  }
+
+  async listModels(): Promise<HostModelOption[]> {
+    return [{ provider: "fake", id: "provider", name: "Fake" }];
+  }
+  async setModel(provider: string, id: string, projectDefault: boolean): Promise<void> {
+    this.selectedModels.push({ provider, id, projectDefault });
+  }
+  async getThinkingLevels(): Promise<string[]> {
+    return ["off", "medium", "high"];
+  }
+  async setThinkingLevel(level: string, projectDefault: boolean): Promise<string> {
+    this.selectedThinking.push({ level, projectDefault });
+    return level;
+  }
+  async listSessions(): Promise<HostSessionOption[]> {
+    return this.sessions;
+  }
+  async resumeSession(path: string): Promise<SessionSwitchResult> {
+    this.resumeCalls.push(path);
+    this.activeSession = true;
+    return { cancelled: false };
+  }
+  async reload(): Promise<void> {
+    this.reloadCalls += 1;
   }
 
   async compact(): Promise<void> {

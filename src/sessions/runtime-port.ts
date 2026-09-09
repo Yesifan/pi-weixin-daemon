@@ -1,5 +1,11 @@
 import type { PiHostEvent } from "../pi/events.js";
-import type { HostPromptInput, HostStatus, SessionSwitchResult } from "../pi/types.js";
+import type {
+  HostModelOption,
+  HostPromptInput,
+  HostSessionOption,
+  HostStatus,
+  SessionSwitchResult,
+} from "../pi/types.js";
 
 /**
  * Abstraction over the Pi session runtime consumed by the business layer.
@@ -21,6 +27,13 @@ export interface SessionRuntimePort {
   /** Wait until the active Pi run and its event handlers have fully settled. */
   waitForIdle(): Promise<void>;
   newSession(): Promise<SessionSwitchResult>;
+  listModels(): Promise<HostModelOption[]>;
+  setModel(provider: string, modelId: string, projectDefault: boolean): Promise<void>;
+  getThinkingLevels(): Promise<string[]>;
+  setThinkingLevel(level: string, projectDefault: boolean): Promise<string>;
+  listSessions(): Promise<HostSessionOption[]>;
+  resumeSession(path: string): Promise<SessionSwitchResult>;
+  reload(): Promise<void>;
   compact(customInstructions?: string): Promise<void>;
   onEvent(listener: (event: PiHostEvent) => void): () => void;
   hasSession(): boolean;

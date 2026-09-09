@@ -6,3 +6,5 @@
 - [`requirements/0002-pi-host-compatibility.md`](requirements/0002-pi-host-compatibility.md) —— 需求：Pi host 兼容性重构 —— 架构优先、五阶段（对齐 pi 0.84.4 host 语义）。**✅ 已完成（`0.6.0`，涉及 ADR-0003/0004）**
 - [`adr/0003-pi-host-compatibility-policies.md`](adr/0003-pi-host-compatibility-policies.md) —— ADR-0003：Pi host 兼容性策略（per-project fail-closed / cwd 固定 + accounts 重建 / idle 真关闭 / 微信 slash 语义 / UI 降级 / trust 双字段 / send_file 无边界）。**✅ Accepted（`0.6.0`）**
 - [`adr/0004-layering-and-dependency-direction.md`](adr/0004-layering-and-dependency-direction.md) —— ADR-0004：分层与依赖方向（PiSdkHost / SessionController / ProjectController，只有 `src/pi/` import SDK）。**✅ Accepted（`0.6.0`）**
+- [`requirements/0003-weixin-slash-session-controls.md`](requirements/0003-weixin-slash-session-controls.md) —— 需求：微信模型、思考强度、恢复、重载和显式 prompt 命令。**✅ 已完成（`0.6.3`，涉及 ADR-0005）**
+- [`adr/0005-weixin-slash-session-controls.md`](adr/0005-weixin-slash-session-controls.md) —— ADR-0005：微信 Slash 会话控制与交互仲裁。**✅ Accepted（`0.6.3`）**

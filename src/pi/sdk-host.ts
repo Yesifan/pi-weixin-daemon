@@ -1,7 +1,9 @@
 import {
   createAgentSessionRuntime,
   getAgentDir,
+  ModelRuntime,
   SessionManager,
+  SettingsManager,
   type AgentSession,
   type AgentSessionRuntime,
   type ExtensionFactory,
@@ -13,7 +15,15 @@ import { PiExtensionHost } from "./extension-host.js";
 import { resolveProjectTrust } from "./project-trust.js";
 import { createPiRuntimeFactory, PiInitializationError } from "./runtime-factory.js";
 import { PiSessionHost } from "./session-host.js";
-import type { HostExtensionMode, HostPromptInput, HostStatus, SessionSwitchResult } from "./types.js";
+import type {
+  HostExtensionMode,
+  HostModelOption,
+  HostPromptInput,
+  HostSessionOption,
+  HostStatus,
+  SessionSwitchResult,
+} from "./types.js";
+import type { ThinkingLevel } from "@earendil-works/pi-ai";
 
 export interface PiSdkHostOptions {
   /** Project working directory. The single entry point for the project. */
@@ -169,6 +179,68 @@ export class PiSdkHost {
     this.opts.logger.info("new session requested");
     const r = await this.runtime.newSession();
     return { cancelled: r.cancelled };
+  }
+
+  async listModels(): Promise<HostModelOption[]> {
+    const models = this.runtime
+      ? await this.runtime.services.modelRuntime.getAvailable()
+      : await (await ModelRuntime.create()).getAvailable();
+    return models.map((model) => ({ provider: model.provider, id: model.id, name: model.name ?? model.id }));
+  }
+
+  async setModel(provider: string, modelId: string, projectDefault: boolean): Promise<void> {
+    const modelRuntime = this.runtime?.services.modelRuntime ?? (await ModelRuntime.create());
+    const model = modelRuntime.getModel(provider, modelId);
+    if (!model) throw new Error(`model not found: ${provider}/${modelId}`);
+    if (this.sessionRef) await this.sessionRef.setModel(model);
+    if (projectDefault || !this.sessionRef) {
+      await this.updateProjectSettings("defaultProvider", provider);
+      await this.updateProjectSettings("defaultModel", modelId);
+    }
+  }
+
+  async getThinkingLevels(): Promise<string[]> {
+    return this.sessionRef?.getAvailableThinkingLevels() ?? ["off", "minimal", "low", "medium", "high", "xhigh"];
+  }
+
+  async setThinkingLevel(level: string, projectDefault: boolean): Promise<string> {
+    if (this.sessionRef) this.sessionRef.setThinkingLevel(level as ThinkingLevel);
+    if (projectDefault || !this.sessionRef) await this.updateProjectSettings("defaultThinkingLevel", level);
+    return String(this.sessionRef?.thinkingLevel ?? level);
+  }
+
+  async listSessions(): Promise<HostSessionOption[]> {
+    const sessions = await SessionManager.list(this.opts.cwd);
+    return sessions.map((session) => ({
+      path: session.path,
+      id: session.id,
+      modifiedAt: session.modified.getTime(),
+      firstMessage: session.firstMessage,
+      name: session.name,
+    }));
+  }
+
+  async resumeSession(path: string): Promise<SessionSwitchResult> {
+    const runtime = await this.ensureRuntime();
+    return runtime.switchSession(path);
+  }
+
+  async reload(): Promise<void> {
+    if (!this.sessionRef) return;
+    await this.sessionRef.reload();
+  }
+
+  private async updateProjectSettings(field: string, value: unknown): Promise<void> {
+    const settings = this.runtime?.services.settingsManager ?? SettingsManager.create(this.opts.cwd, getAgentDir());
+    // Pi 0.84 exposes project-scoped package setters but not scalar defaults;
+    // use its project update primitive so locking, merge and error handling stay in Pi.
+    const scoped = settings as unknown as {
+      updateProjectSettings(key: string, update: (project: Record<string, unknown>) => void): void;
+    };
+    scoped.updateProjectSettings(field, (project) => { project[field] = value; });
+    await settings.flush();
+    const errors = settings.drainErrors();
+    if (errors.length) throw errors[0]!.error;
   }
 
   /** Compact the current session. No-op when no session exists. */

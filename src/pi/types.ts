@@ -19,6 +19,20 @@ export interface HostPromptInput {
 }
 
 /** Domain session status exposed to the business layer. */
+export interface HostModelOption {
+  provider: string;
+  id: string;
+  name: string;
+}
+
+export interface HostSessionOption {
+  path: string;
+  id: string;
+  modifiedAt: number;
+  firstMessage: string;
+  name?: string;
+}
+
 export interface HostStatus {
   sessionFile: string | undefined;
   sessionId: string | undefined;

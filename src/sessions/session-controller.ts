@@ -49,6 +49,7 @@ export class SessionController {
   private error?: string;
   private lastActivityAt = Date.now();
   private idleTimer: NodeJS.Timeout | undefined;
+  private selector: SlashSelector | undefined;
 
   constructor(private readonly deps: SessionControllerDeps) {}
 
@@ -74,6 +75,7 @@ export class SessionController {
   }
 
   async stop(): Promise<void> {
+    this.clearSelector();
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = undefined;
@@ -85,14 +87,22 @@ export class SessionController {
   }
 
   /** Execute an explicitly-mapped daemon command (classification done upstream). */
-  async handleCommand(command: DaemonCommand, msg: InboundMessage): Promise<void> {
+  async handleCommand(command: DaemonCommand, msg: InboundMessage): Promise<void>;
+  async handleCommand(command: DaemonCommand, args: string, msg: InboundMessage): Promise<void>;
+  async handleCommand(command: DaemonCommand, argsOrMsg: string | InboundMessage, maybeMsg?: InboundMessage): Promise<void> {
+    const args = typeof argsOrMsg === "string" ? argsOrMsg : "";
+    const msg = typeof argsOrMsg === "string" ? maybeMsg! : argsOrMsg;
     this.lastActivityAt = Date.now();
     this.scheduleIdleCheck();
 
     const turn = toTurnContext(msg);
     this.deps.logger.info({ command, accountId: msg.accountId, messageId: msg.messageId }, "command");
     try {
-      await this.executeCommand(command, turn);
+      if (this.deps.interaction.isUiInteractionActive() && command !== "abort" && command !== "status" && command !== "help") {
+        await this.reply(turn, "当前正在等待 Pi UI 交互回复，请先完成或中止该交互。");
+        return;
+      }
+      await this.executeCommand(command, args, turn);
     } catch (err) {
       this.deps.logger.error({ err, command, project: this.deps.projectId }, "command execution failed");
       // A failed outbound send cannot be reported over the same failed channel;
@@ -101,10 +111,10 @@ export class SessionController {
     }
   }
 
-  private async executeCommand(command: DaemonCommand, turn: TurnContext): Promise<void> {
+  private async executeCommand(command: DaemonCommand, args: string, turn: TurnContext): Promise<void> {
     switch (command) {
       case "help":
-        await this.reply(turn, helpText());
+        await this.reply(turn, helpText(args));
         return;
       case "status":
         await this.reply(turn, this.formatStatus());
@@ -137,6 +147,56 @@ export class SessionController {
           await this.reply(turn, `⚠️ 新建会话失败：${this.error}`);
         }
         return;
+      case "model":
+        if (this.state === "busy" || this.state === "replacing") {
+          await this.reply(turn, BUSY_REPLY);
+          return;
+        }
+        await this.openModelSelector(turn);
+        return;
+      case "thinking":
+        if (this.state === "busy" || this.state === "replacing") {
+          await this.reply(turn, BUSY_REPLY);
+          return;
+        }
+        if (!this.deps.host.hasSession()) {
+          await this.reply(turn, "当前没有活动会话，请先选择模型或发送消息创建会话。");
+          return;
+        }
+        await this.openThinkingSelector(turn);
+        return;
+      case "resume":
+        if (this.state === "busy" || this.state === "replacing") {
+          await this.reply(turn, "Agent 忙时不能恢复会话，请先 /abort 或等待完成。");
+          return;
+        }
+        if (args.trim().toLowerCase() === "latest") {
+          if (this.deps.host.hasSession()) {
+            await this.reply(turn, "当前已经在最新的会话中了。");
+            return;
+          }
+          const sessions = await this.deps.host.listSessions();
+          if (!sessions.length) {
+            await this.reply(turn, "没有可恢复的历史会话。");
+            return;
+          }
+          await this.switchToSession(turn, sessions[0]!.path);
+          return;
+        }
+        await this.openResumeSelector(turn);
+        return;
+      case "reload":
+        if (this.state === "busy" || this.state === "replacing") {
+          await this.reply(turn, "Agent 忙时不能重载，请先 /abort 或等待完成。");
+          return;
+        }
+        if (!this.deps.host.hasSession()) {
+          await this.reply(turn, "当前没有活动会话，无需重载。");
+          return;
+        }
+        await this.deps.host.reload();
+        await this.reply(turn, "✅ 已重新加载 Pi 配置和扩展。");
+        return;
       case "compact":
         if (this.state === "busy") {
           await this.reply(turn, "Agent 忙时不能压缩会话，请先 /abort 或等待完成。");
@@ -168,6 +228,18 @@ export class SessionController {
 
     const turn = toTurnContext(msg);
 
+    if (this.selector) {
+      if (sameOrigin(this.selector.turn, turn)) {
+        await this.handleSelectorInput(msg.text ?? "");
+        return;
+      }
+      if (this.selector.kind === "resume") {
+        await this.reply(turn, "当前项目正在选择要恢复的会话，请稍后再试。");
+        return;
+      }
+      await this.cancelSelector("Agent 已开始处理新任务，本次选择已取消。");
+    }
+
     if (this.state === "busy" || this.state === "replacing") {
       this.deps.logger.info({ accountId: msg.accountId, senderId: msg.senderId, state: this.state }, "busy refusal");
       await this.reply(turn, BUSY_REPLY);
@@ -196,6 +268,7 @@ export class SessionController {
   }
 
   private async runTurn(msg: InboundMessage): Promise<void> {
+    if (this.selector) await this.cancelSelector("Agent 已开始处理新任务，本次选择已取消。");
     const turn = toTurnContext(msg);
     this.deps.currentTurn.set(turn);
     this.state = "busy";
@@ -325,6 +398,121 @@ export class SessionController {
     await this.deps.transport.sendText(turn, text);
   }
 
+  private async openModelSelector(turn: TurnContext): Promise<void> {
+    const options = await this.deps.host.listModels();
+    if (!options.length) return this.reply(turn, "没有已配置凭据的可用模型。");
+    await this.beginSelector({ kind: "model", turn, page: 0, options });
+  }
+
+  private async openThinkingSelector(turn: TurnContext): Promise<void> {
+    const options = await this.deps.host.getThinkingLevels();
+    if (!options.length) return this.reply(turn, "当前模型不支持思考强度设置。");
+    await this.beginSelector({ kind: "thinking", turn, page: 0, options });
+  }
+
+  private async openResumeSelector(turn: TurnContext): Promise<void> {
+    const current = this.deps.host.getStatus().sessionFile;
+    const options = (await this.deps.host.listSessions()).filter((item) => item.path !== current);
+    if (!options.length) return this.reply(turn, "没有其他可恢复的历史会话。");
+    await this.beginSelector({ kind: "resume", turn, page: 0, options });
+  }
+
+  private async beginSelector(selector: SlashSelector): Promise<void> {
+    this.clearSelector();
+    selector.timer = setTimeout(() => void this.expireSelector(selector), 30_000);
+    selector.timer.unref();
+    this.selector = selector;
+    await this.renderSelector(selector);
+  }
+
+  private async renderSelector(selector: SlashSelector): Promise<void> {
+    const pageSize = selector.kind === "thinking" ? selector.options.length : 5;
+    const pages = Math.max(1, Math.ceil(selector.options.length / pageSize));
+    selector.page = Math.min(selector.page, pages - 1);
+    const slice = selector.options.slice(selector.page * pageSize, (selector.page + 1) * pageSize);
+    const rows = slice.map((item, i) => `${String.fromCharCode(97 + i)}. ${selectorLabel(item)}`);
+    const page = selector.kind === "thinking" ? "" : `\n页 ${selector.page + 1}/${pages}（回复页码翻页）`;
+    const inactiveHint = selector.kind === "model" && !this.deps.host.hasSession()
+      ? "\n当前没有活动会话，选择将切换该项目的默认模型。"
+      : "";
+    const instruction = selector.kind === "resume"
+      ? "回复字母选择、页码翻页，或 q 退出。"
+      : "回复字母选择、字母 default 设项目默认，或 q 退出。";
+    await this.reply(selector.turn, `${rows.join("\n")}${page}${inactiveHint}\n${instruction}`);
+  }
+
+  private async handleSelectorInput(input: string): Promise<void> {
+    const selector = this.selector;
+    if (!selector) return;
+    const text = input.trim().toLowerCase();
+    if (text === "q") {
+      this.clearSelector();
+      await this.reply(selector.turn, "已退出选择。");
+      return;
+    }
+    const pageSize = selector.kind === "thinking" ? selector.options.length : 5;
+    if (/^\d+$/.test(text) && selector.kind !== "thinking") {
+      const page = Number(text) - 1;
+      if (page >= 0 && page < Math.ceil(selector.options.length / pageSize)) {
+        selector.page = page;
+        await this.renderSelector(selector);
+      } else await this.reply(selector.turn, "没有该页，请回复有效页码或 q 退出。");
+      return;
+    }
+    const match = /^([a-e])(?:\s+(default))?$/.exec(text);
+    const index = match ? match[1]!.charCodeAt(0) - 97 : -1;
+    const item = selector.options[selector.page * pageSize + index];
+    if (!match || !item || index >= pageSize) {
+      await this.reply(selector.turn, "无法识别，请回复选项字母、页码或 q 退出。");
+      return;
+    }
+    const makeDefault = Boolean(match[2]) || (selector.kind === "model" && !this.deps.host.hasSession());
+    this.clearSelector();
+    if (selector.kind === "model") {
+      const model = item as ModelChoice;
+      await this.deps.host.setModel(model.provider, model.id, makeDefault);
+      await this.reply(selector.turn, `✅ 已选择模型 ${model.provider}/${model.id}${makeDefault ? "，并设为项目默认" : ""}。`);
+    } else if (selector.kind === "thinking") {
+      const actual = await this.deps.host.setThinkingLevel(item as string, makeDefault);
+      await this.reply(selector.turn, `✅ 思考强度已设为 ${actual}${makeDefault ? "，并设为项目默认" : ""}。`);
+    } else {
+      await this.switchToSession(selector.turn, (item as SessionChoice).path);
+    }
+  }
+
+  private async switchToSession(turn: TurnContext, path: string): Promise<void> {
+    this.state = "replacing";
+    try {
+      const result = await this.deps.host.resumeSession(path);
+      this.state = "ready";
+      await this.reply(turn, result.cancelled ? "⚠️ 已取消恢复会话。" : "✅ 已恢复会话。");
+    } catch (err) {
+      this.state = "faulted";
+      this.error = formatUserFacingError(err);
+      await this.reply(turn, `⚠️ 恢复会话失败：${this.error}`);
+    }
+  }
+
+  private async expireSelector(expected: SlashSelector): Promise<void> {
+    if (this.selector !== expected) return;
+    this.clearSelector();
+    await this.reply(expected.turn, "⏱️ 选择已超时，请重新输入命令。").catch((err: unknown) =>
+      this.deps.logger.warn({ err }, "selector timeout reply failed"),
+    );
+  }
+
+  private async cancelSelector(message: string): Promise<void> {
+    const selector = this.selector;
+    if (!selector) return;
+    this.clearSelector();
+    await this.reply(selector.turn, message);
+  }
+
+  private clearSelector(): void {
+    if (this.selector?.timer) clearTimeout(this.selector.timer);
+    this.selector = undefined;
+  }
+
   // --- idle auto-close -------------------------------------------------------
 
   private scheduleIdleCheck(): void {
@@ -376,6 +564,24 @@ export class SessionController {
       }
     }
   }
+}
+
+type ModelChoice = { provider: string; id: string; name: string };
+type SessionChoice = { path: string; id: string; modifiedAt: number; firstMessage: string; name?: string };
+type SlashSelector =
+  | { kind: "model"; turn: TurnContext; page: number; options: ModelChoice[]; timer?: NodeJS.Timeout }
+  | { kind: "thinking"; turn: TurnContext; page: number; options: string[]; timer?: NodeJS.Timeout }
+  | { kind: "resume"; turn: TurnContext; page: number; options: SessionChoice[]; timer?: NodeJS.Timeout };
+
+function sameOrigin(a: TurnContext, b: TurnContext): boolean {
+  return a.accountId === b.accountId && a.senderId === b.senderId;
+}
+
+function selectorLabel(item: ModelChoice | SessionChoice | string): string {
+  if (typeof item === "string") return item;
+  if ("provider" in item) return `${item.provider}/${item.id}${item.name === item.id ? "" : ` (${item.name})`}`;
+  const title = item.name || item.firstMessage || item.id;
+  return `${new Date(item.modifiedAt).toLocaleString("zh-CN")} ${title.replace(/\s+/g, " ").slice(0, 60)}`;
 }
 
 class TurnTimeoutError extends Error {

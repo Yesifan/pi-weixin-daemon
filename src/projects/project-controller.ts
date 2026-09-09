@@ -152,7 +152,7 @@ export class ProjectController {
       session = this.requireSession();
       // W4: only the daemon's explicitly-mapped commands enter slash handling.
       if (routed.kind === "daemon-command") {
-        await session.handleCommand(routed.command, msg);
+        await session.handleCommand(routed.command, routed.args, msg);
         this.reflectState(session);
         return;
       }
@@ -163,6 +163,8 @@ export class ProjectController {
         );
         return;
       }
+
+      if (routed.kind === "prompt") msg = { ...msg, text: routed.text };
 
       // ③ Notify other project participants when a sender speaks (ordinary messages only).
       await this.notifyOthers(msg).catch((err: unknown) =>

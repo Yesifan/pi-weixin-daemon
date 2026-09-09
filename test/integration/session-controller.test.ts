@@ -230,6 +230,49 @@ describe("M6 commands over weixin", () => {
 
 });
 
+describe("slash selectors", () => {
+  it("selects an inactive model as the project default", async () => {
+    const { runtime, transport, session } = setup();
+    await session.start();
+
+    await session.handleCommand("model", "", msgA("/model"));
+    expect(transport.textsTo("acct-a")[0]).toContain("选择将切换该项目的默认模型");
+    await session.handleUserMessage(msgA("a", "choose-model"));
+
+    expect(runtime.selectedModels).toEqual([{ provider: "fake", id: "provider", projectDefault: true }]);
+  });
+
+  it("resume selector blocks another account and restores the selected session", async () => {
+    const runtime = new FakeAgentRuntime();
+    runtime.sessions = [{
+      path: "/fake/old.jsonl",
+      id: "old",
+      modifiedAt: Date.now(),
+      firstMessage: "old prompt",
+    }];
+    const { transport, session } = setup({ runtime });
+    await session.start();
+
+    await session.handleCommand("resume", "", msgA("/resume"));
+    await session.handleUserMessage(msgB("hello"));
+    expect(transport.textsTo("acct-b")).toEqual(["当前项目正在选择要恢复的会话，请稍后再试。"]);
+
+    await session.handleUserMessage(msgA("a", "choose-resume"));
+    expect(runtime.resumeCalls).toEqual(["/fake/old.jsonl"]);
+    expect(session.getState()).toBe("ready");
+  });
+
+  it("/resume latest refuses to replace an active session", async () => {
+    const { runtime, transport, session } = setup();
+    await session.start();
+    await runtime.ensureSession();
+
+    await session.handleCommand("resume", "latest", msgA("/resume latest"));
+    expect(transport.textsTo("acct-a")).toEqual(["当前已经在最新的会话中了。"]);
+    expect(runtime.resumeCalls).toEqual([]);
+  });
+});
+
 describe("M8 media routing through the session controller", () => {
   it("image attachments become multimodal domain images in the prompt", async () => {
     const { runtime, session } = setup();
