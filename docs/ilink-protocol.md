@@ -1,7 +1,7 @@
 # Weixin iLink 协议机制存档
 
 > 本文件记录 `pi-weixin-daemon` 所依赖的微信 iLink 机制，以及官方参考实现
-> `Tencent/openclaw-weixin` 的关键行为。作为后续 multi-project 升级的**协议依据**。
+> `Tencent/openclaw-weixin` 的关键行为，并存档当前 multi-project 实现所依据的**协议契约**。
 >
 > 原则：只引用、不发明。涉及协议行为时以官方当前 `main`、`CHANGELOG`、源码为准，
 > 不凭经验猜测，也不重新发明一套行为。
@@ -24,9 +24,9 @@ iLink 是微信面向 bot 的通道协议。一个账号 = 一个**bot**（`ilin
    - **道 2 · 路由解析**：`resolveAgentRoute` 决定「这个账号 → 哪个 agent」；无 agent
      路由 → 丢弃。
    - 方案的 `accountId→projectId` 索引，**等价于官方「道 2」**。
-3. **`getUpdates` 按账号自己的 `bot_token` 鉴权**，返回发给「那个 bot」的消息。它
-   完全不认识 Project/绑定——**monitor 层先收到，但被鉴权 + 路由两道门挡掉**，到不了
-   媒体 / Pi 层。
+3. **`getUpdates` 按账号自己的 `bot_token` 鉴权**，返回该 bot 的消息记录，但完全不认识
+   Project/绑定。本地在 transport 层先丢弃明确的 BOT/非 USER 记录，再执行 project gate；
+   未绑定或停用的消息不会进入媒体/Pi 层。本地没有官方 pairing/allowFrom 那一道发送方鉴权。
 
 ---
 
@@ -105,8 +105,13 @@ context_token 歧义。
 `MessageItemType`：`1=TEXT` `2=IMAGE` `3=VOICE` `4=FILE` `5=VIDEO` `11=TOOL_CALL_START`
 `12=TOOL_CALL_RESULT`。
 
-本地 `normalizeInboundMessage`（`src/weixin/normalize.ts`）只把
-`message_type===USER`（或未定义）且 `is_completed` 无误的消息作为 agent 输入。
+本地 `ILinkWeixinTransport.handleInbound`（`src/weixin/transport.ts`）在媒体下载前丢弃
+明确的 BOT/非 USER 记录；`message_type` 缺失时为兼容旧报文仍按 USER 接受。随后
+`normalizeInboundMessage`（`src/weixin/normalize.ts`）提取文本和附件。
+
+`message_state` 是消息级状态（`NEW=0`、`GENERATING=1`、`FINISH=2`）；`is_completed`
+则位于单个 `MessageItem` 上。当前本地和官方参考实现都没有据此过滤 USER 输入，其完整语义
+缺乏充分协议说明，因此不能未经真实报文验证就只接受 `FINISH/is_completed=true`。
 
 ### 出站（回复）
 
@@ -175,10 +180,9 @@ resolveSenderCommandAuthorizationWithRuntime({
 `resolveDirectDmAuthorizationOutcome` 若为 `disabled`/`unauthorized` → 丢弃。
 
 > **本地当前差异**：本地 `src/` **没有**发送方鉴权（无 `pairing`/`allowFrom`/
-> `authorize`），`normalizeInboundMessage` 只按 `message_type===USER` 过滤，不按发送方。
-> 这是 multi-project 升级时**要拍板的分叉**：
-> - A（当前/方案字面）：`accountId→projectId` 路由即可，任何向该 bot 发消息的 USER 都进 Pi。
-> - B（对齐官方）：加 `*-allowFrom.json` 配对白名单 + 扫码人兜底，未授权 sender 丢弃。
+> `authorize`）。transport 只做消息类型 gate：明确的 BOT/非 USER 记录直接丢弃；USER 或缺失
+> `message_type` 的兼容报文继续经过 project gate。通过项目 gate 后，任意 `senderId` 都可能进入 Pi。
+> 若未来要对齐官方，需要增加 `*-allowFrom.json` 配对白名单 + 扫码人兜底。
 
 ### 道 2 · 路由解析（对应方案的 account→project 索引）
 
@@ -193,24 +197,24 @@ if (!route.agentId) {
 }
 ```
 
-**方案的 `accountId→projectId` 索引 ≡ 官方的 `resolveAgentRoute`（道 2）。** §7
-「account 没绑 Project → 不进入 Pi、不 queue、忽略」≡ 官方「no agentId → drop」。
+**本地的 `accountId→projectId` 索引 ≡ 官方的 `resolveAgentRoute`（道 2）。** §7
+中未绑定/停用的账号不会进入 Pi，但本地会在丢弃前回复原因，而非静默 drop。
 
 ---
 
-## 7. 面向 multi-project 的关键契约（本轮推断，待实现时验证）
+## 7. 本地 multi-project 实现契约
 
-1. **「先门后下」**：在 account transport 层先做 `accountProjectIndex.get(accountId)`
-   一次 `Map` 查询（O(1)）——未绑定 / Project disabled → **不下载媒体、不鉴权**，并**回发告知
-   用户**（区分「未绑定 / 项目停用」两种文案）；已绑定 → 才下载到该 Project 的 inbox
+1. **「先门后下」**：account transport 通过动态 `resolveInboxDir(accountId)` 查询当前项目——
+   未绑定 / Project disabled → **不下载媒体**，并**回发告知用户**（区分「未绑定 / 项目停用」
+   两种文案）；已绑定 → 才下载到该 Project 的 inbox
    （`<cwd>/.pi-weixin/inbox`）。
    - 这样**「未绑定账号的媒体」根本不会出现**。
    - 比官方更省：官方是 `saveMediaBuffer` 先下、后查 route，可能白下一份。
    - **已绑定但 runtime 未运行**：绑定 + 启用 ⇒ 有 inbox，所以下载发生在 transport gate 之后；
      真正判 `!rt` 丢弃在 `ProjectManager.dispatch`，此处**回发**「项目当前未运行」。
-2. **inboxDir 不应写死进 transport**：按账号当前绑定动态解析，rebind 时无需重建长轮询
-   （不丢 `get_updates_buf`）。
-3. **busy / abort 是 Project 作用域**，不跨 Project 阻塞（见主方案 §8/§9）。
+2. **inboxDir 不写死进 transport**：按账号当前绑定动态解析，rebind 时无需重建长轮询
+   （不丢 `get_updates_buf`）；当前由 daemon 注入 `resolveInboxDir` 实现。
+3. **busy / abort 是 Project 作用域**，不跨 Project 阻塞（见 [`routing.md`](routing.md)）。
 4. **媒体处理（参考 Hermes，不混合）**：每条 iLink 消息独立成回合；image → 多模态
    （base64+mime）；file / video / voice → **context note**（类型+保存路径+“自己读/处理”）给 agent；
    voice 优先用 `voice_item.text`（iLink 自带语音转写）当文本，无转写才作为语音附件；
@@ -272,7 +276,9 @@ if (!route.agentId) {
 - `src/weixin/auth/login-qr.ts`（扫码状态机）
 - `src/weixin/monitor/monitor.ts`（长轮询）
 - `src/weixin/transport.ts`（每账号 ILinkWeixinTransport facade）
-- `src/bridge/`（busy / TurnContext / 命令路由 / UI 闭环）
+- `src/projects/`（项目路由、参与者注册与广播）
+- `src/sessions/`（busy / TurnContext / 命令与会话状态机）
+- `src/pi/`、`src/weixin/interaction-controller.ts`（Pi host 与微信 UI 闭环）
 
 ---
 
@@ -283,12 +289,12 @@ if (!route.agentId) {
 - 登录产物 `ilink_bot_id`/`bot_token`/`ilink_user_id`/`baseurl`。
 - `getupdates` 端点与 `get_updates_buf` cursor 契约、`context_token` 需回传。
 - 官方 `processOneMessage` 的「道 1（pairing 鉴权 + 扫码人兜底）+ 道 2（resolveAgentRoute）」。
-- 本地 `src/` **无**发送方鉴权（我 grep 无 `pairing`/`allowFrom`）。
+- 本地 `src/` **无**发送方 pairing/allowFrom 鉴权。
 - stale token `-14` 按账号暂停 1h，非全局失效。
-- 本地媒体先下载、后路由（现状），与「先门后下」待重构。
+- 本地已实现 transport project gate 先于媒体下载；明确的 BOT/非 USER 记录更早被丢弃。
 
-**待落地时实证 / 确认**：
+**仍待实证 / 确认**：
 
 - Tencent `main` 当前实际 CHANGELOG 与 `2.4.7` / `2.4.6` 兼容结论（§9）。
 - getUpdates 是否 at-least-once（issue #239）对 daemon 去重的实际影响。
-- 「先门后下」重构对现有真实收发 regression 的影响。
+- 已落地的「先门后下」和 BOT gate 在更多真实账号/报文上的兼容性。

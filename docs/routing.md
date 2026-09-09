@@ -30,10 +30,10 @@
 ```
 
 - 一个账号只属于一个项目；一个项目可绑多个账号。
-- 一个项目只有一个会话，所以多个账号 / 真人共用同一份上下文。
-- 因为一个账号（bot）**只服务它绑定的 owner**（owner-scoped），所以
-  `senderId`(= `from_user_id`) 恒等于 `account.userId`(= `ilink_user_id`)——
-  即"谁发给这个账号"永远是"这个账号的主人"。
+- 一个项目至多有一个活动会话，所以多个账号 / 真人共用同一份活动上下文。
+- owner-scoped 协议下，一个账号（bot）通常只服务扫码 owner；但本地没有 pairing/allowFrom
+  鉴权，也不校验 `senderId === account.userId`。回复和广播始终使用报文中实际观测到的
+  `senderId`，不把二者字节相等作为安全边界。
 
 ---
 
@@ -50,12 +50,12 @@
         │   # 归一化成 InboundMessage{ accountId=bot, senderId=user }
         ▼
   pi-weixin 投递到 项目 → ProjectController → SessionController
-        │   # 若加需求②：在文本末尾追加 "-- from weixin <账号name>"
+        │   # 在文本末尾追加 "-- from weixin <账号name>"
         ▼
   pi agent 处理，生成回复消息B
         │
         ▼
-  pi-weixin 把消息B 发给微信服务器      # 接收方 = senderId(=userId) + context_token
+  pi-weixin 把消息B 发给微信服务器      # 接收方 = 实际 senderId + context_token
         │
         ▼
   微信服务器 通过 bot 把消息B 发回给 user
@@ -66,9 +66,11 @@
 - **出站**：回复使用 `TurnContext`（`accountId`/`senderId`/`context_token`）回传；
   `context_token` 必须原样回传。
 
-### 丢弃前的告知（gate）
+### 入站 gate 与丢弃前告知
 
-账号在进入 Pi 前会先过一次“多项目 gate”（绑定 / 启用判定）。原先是**静默丢弃**；现在
+transport 首先丢弃明确的 BOT/非 USER 记录；该检查发生在项目查询和媒体下载之前。
+`message_type` 缺失的旧报文仍按 USER 兼容。通过类型 gate 后，账号再进入“多项目 gate”
+（绑定 / 启用判定）。后者原先是**静默丢弃**；现在
 **区分原因并回发告知**，让用户知道为什么没反应：
 
 - **未绑定**：`⚠️ 该账号尚未绑定任何项目，请先绑定 project 后再使用。`
@@ -98,8 +100,8 @@
 
 ## 回复 / 广播
 
-- **文本回复**：默认只发给**发起者**（`TurnContext`）；但 project 层注入 `broadcastText` 后，
-  agent 的最终回复会**广播**给项目内**所有**参与者（含发起者）——需求④。
+- **成功文本回复**：project 层通过 `broadcastText` 将 agent 最终成功回复广播给项目内
+  **所有**参与者（含发起者）。错误、可能不完整的部分输出和 extension warning 只回发起者。
 - **消息互通**：某账号的 sender 发来消息时，同时通知同项目**其他**参与者，
   内容为 "`<该账号name>`: 消息文本"——需求③。
 - **目标来源**：广播 / 互通的目标取自 **参与者注册表**（`ProjectController` 记录每个项目下
@@ -146,22 +148,26 @@
 ## 会话生命周期
 
 ```
-   项目启动(新建)
-     │  每次启动都新建一个会话
+   项目启动
+     │  仅启动 controller/host，不恢复旧会话
+     ▼
+   [inactive：无 Pi session]
+     │  首条普通消息懒创建
      ▼
    [会话 S]
      │
      ├─ 普通消息 ─▶ 进 S,agent 处理
      ├─ 空闲 ≥10 分钟 ──▶ 自动关闭会话 + 广播"本次会话已关闭"
-     │                         └─> 下一条消息再新建一个会话
-     ├─ /new     ─▶ 换成新会话 S'(旧上下文抛弃)
+     │                         └─> 下一条普通消息再新建一个会话
+     ├─ /new     ─▶ 已有 S 时换成 S'(旧上下文抛弃)
      ├─ /compact ─▶ 压缩 S(仍是 S)
      ├─ /abort   ─▶ 中止当前任务(仍是 S)
-     └─ daemon 重启 ─▶ 新建一个会话
+     └─ daemon 重启 ─▶ 回到 inactive
 ```
 
-- 项目启动时**总新建**一个会话（不做跨重启恢复）；普通消息始终进这同一个会话。
-- 只有 `/new` 或 daemon 重启（均新建）会改变"当前会话"；
-  空闲自动关闭也是新建（下一条消息时）。`/compact`、`/abort` 仍只作用于当前会话，不换会话。
+- 项目启动时不创建 Pi session，也不跨重启恢复；首条普通消息才创建全新会话，后续普通消息
+  进入同一个活动会话。
+- 已有活动会话时 `/new` 才会替换它；inactive 状态下 `/new` 只提示直接发送普通消息。
+  空闲自动关闭后，下一条普通消息会创建新会话。`/compact`、`/abort` 不主动换会话。
 - 项目忙时（`busy`），普通消息**直接拒绝、不排队**，不进会话；`WAITING_FOR_UI` 时只有
   当前 turn 发起者的消息作为答复，其余同样拒绝（见上方「UI / 权限交互」）。
