@@ -16,6 +16,8 @@ export const DEFAULT_SESSION_IDLE_MS = 10 * 60 * 1000;
 export const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
 /** Time allowed for Pi to settle after a timeout abort. */
 export const DEFAULT_ABORT_GRACE_MS = 10_000;
+/** Refresh interval for Weixin's transient typing state. */
+export const DEFAULT_TYPING_KEEPALIVE_MS = 5_000;
 /** Inactivity timeout for a Weixin slash selector. */
 export const DEFAULT_SLASH_INTERACTION_TIMEOUT_MS = 30_000;
 
@@ -31,6 +33,10 @@ export interface SessionControllerDeps {
   sessionIdleMs?: number;
   /** Broadcast a turn's final reply / idle-close notice to all participants. */
   broadcastText?: (text: string) => Promise<DeliveryReport | void>;
+  /** Set or clear typing for all authorized project participants. */
+  broadcastTyping?: (typing: boolean) => Promise<void>;
+  /** Typing refresh interval; primarily configurable for tests. */
+  typingKeepaliveMs?: number;
   /** Human label for an inbound sender (used in "-- from weixin <name>"). */
   resolveSenderLabel?: (msg: InboundMessage) => string;
   /** Maximum duration of one Pi turn; 0 disables the watchdog. */
@@ -278,8 +284,8 @@ export class SessionController {
     this.state = "busy";
     let nextState: SessionState = "ready";
 
+    const stopTyping = await this.startTyping(turn);
     try {
-      await this.deps.transport.setTyping(turn, true);
       const accumulator = new ResponseAccumulator();
       const unsubscribe = this.deps.host.onEvent((event) => accumulator.handleEvent(event));
       let outcome: TurnOutcome;
@@ -324,13 +330,43 @@ export class SessionController {
         unsubscribe();
       }
 
-      await this.deps.transport.setTyping(turn, false);
+      await stopTyping();
       await this.deliverOutcome(turn, outcome, msg.messageId);
     } finally {
+      await stopTyping();
       this.deps.interaction.cancelUiWaiters("turn ended");
       this.state = nextState;
       this.deps.currentTurn.set(undefined);
     }
+  }
+
+  private async startTyping(turn: TurnContext): Promise<() => Promise<void>> {
+    const send = async (typing: boolean): Promise<void> => {
+      try {
+        if (this.deps.broadcastTyping) await this.deps.broadcastTyping(typing);
+        else await this.deps.transport.setTyping(turn, typing);
+      } catch (err) {
+        this.deps.logger.warn({ err, project: this.deps.projectId, typing }, "typing update failed (ignored)");
+      }
+    };
+
+    await send(true);
+    let closed = false;
+    let inFlight = Promise.resolve();
+    const timer = setInterval(() => {
+      if (closed) return;
+      // Serialize refreshes so cleanup cannot race a delayed status=1 request.
+      inFlight = inFlight.then(() => send(true));
+    }, this.deps.typingKeepaliveMs ?? DEFAULT_TYPING_KEEPALIVE_MS);
+    timer.unref();
+
+    return async () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(timer);
+      await inFlight;
+      await send(false);
+    };
   }
 
   private async deliverOutcome(turn: TurnContext, outcome: TurnOutcome, messageId: string): Promise<void> {

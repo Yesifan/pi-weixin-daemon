@@ -76,12 +76,17 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
     await tick();
     expect(h.transports.get("B")!.textsTo("B")).toContain("name-A: hello from a");
     expect(h.transports.get("A")!.textsTo("A")).not.toContain("name-A: hello from a");
+    // Typing follows the project broadcast audience, not only the origin.
+    expect(h.transports.get("A")!.typingEvents.at(-1)?.typing).toBe(true);
+    expect(h.transports.get("B")!.typingEvents.at(-1)?.typing).toBe(true);
 
     // Agent reply is broadcast to BOTH A and B.
     h.fakes.get("foo")!.complete("final answer");
     await pA;
     expect(h.transports.get("A")!.textsTo("A")).toContain("final answer");
     expect(h.transports.get("B")!.textsTo("B")).toContain("final answer");
+    expect(h.transports.get("A")!.typingEvents.at(-1)?.typing).toBe(false);
+    expect(h.transports.get("B")!.typingEvents.at(-1)?.typing).toBe(false);
   });
 
   it("keeps the Pi project healthy when one broadcast delivery fails", async () => {

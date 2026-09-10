@@ -109,6 +109,7 @@ export class ProjectController {
         turnTimeoutMs: this.opts.turnTimeoutMs,
         abortGraceMs: this.opts.abortGraceMs,
         broadcastText: (text) => this.broadcastToRegistry(text),
+        broadcastTyping: (typing) => this.broadcastTypingToRegistry(typing),
         resolveSenderLabel: (msg) => this.opts.resolveSenderName?.(msg.accountId) ?? msg.accountId,
       });
       await this.session.start();
@@ -259,6 +260,23 @@ export class ProjectController {
       text,
     );
   }
+
+  /** Set or clear typing independently for every authorized participant. */
+  private readonly broadcastTypingToRegistry = async (typing: boolean): Promise<void> => {
+    for (const p of this.broadcastTargets()) {
+      try {
+        await this.opts.transport.setTyping(
+          { accountId: p.accountId, senderId: p.senderId, messageId: "typing", contextToken: p.contextToken },
+          typing,
+        );
+      } catch (err) {
+        this.opts.logger.warn(
+          { err, project: this.projectId, account: p.accountId, sender: p.senderId, typing },
+          "typing broadcast to participant failed (ignored)",
+        );
+      }
+    }
+  };
 
   /** ④ Broadcast the agent's final reply to every authorized participant. */
   private readonly broadcastToRegistry = async (text: string): Promise<DeliveryReport> => {

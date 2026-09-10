@@ -9,3 +9,4 @@
 - [`requirements/0003-weixin-slash-session-controls.md`](requirements/0003-weixin-slash-session-controls.md) —— 需求：微信模型、思考强度、恢复、重载和显式 prompt 命令。**✅ 已完成（`0.6.3`，涉及 ADR-0005）**
 - [`adr/0005-weixin-slash-session-controls.md`](adr/0005-weixin-slash-session-controls.md) —— ADR-0005：微信 Slash 会话控制与交互仲裁。**✅ Accepted（`0.6.3`）**
 - [`requirements/0004-weixin-agent-progress-tool.md`](requirements/0004-weixin-agent-progress-tool.md) —— 需求：为长任务提供只回当前发起者的 Agent 中间进度工具。**✅ 已完成（`0.6.4`）**
+- [`requirements/0005-weixin-typing-keepalive-and-broadcast.md`](requirements/0005-weixin-typing-keepalive-and-broadcast.md) —— 需求：Pi turn 期间每 5 秒续发微信正在输入状态，并广播给项目参与者。**✅ 已完成（`0.6.7`）**

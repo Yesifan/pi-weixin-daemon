@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.6.7]
+
+### Changed
+
+- 普通 Pi 回合的微信“正在输入”状态改为每 5 秒续发，并向项目内所有已注册参与者广播；回合收尾会在等待在途续发后显式取消。
+
 ## [0.6.6]
 
 ### Changed

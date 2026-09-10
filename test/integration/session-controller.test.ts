@@ -13,6 +13,8 @@ const logger = createLogger({ level: "silent" });
 
 function setup(opts: {
   broadcastText?: (t: string) => Promise<void>;
+  broadcastTyping?: (typing: boolean) => Promise<void>;
+  typingKeepaliveMs?: number;
   senderLabel?: (m: { accountId: string }) => string;
   runtime?: FakeAgentRuntime;
   turnTimeoutMs?: number;
@@ -35,6 +37,8 @@ function setup(opts: {
     currentTurn,
     logger,
     broadcastText: opts.broadcastText,
+    broadcastTyping: opts.broadcastTyping,
+    typingKeepaliveMs: opts.typingKeepaliveMs,
     resolveSenderLabel: opts.senderLabel as never,
     turnTimeoutMs: opts.turnTimeoutMs,
     abortGraceMs: opts.abortGraceMs,
@@ -83,6 +87,25 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
 
     expect(transport.typingEvents.map((t) => t.typing)).toEqual([true, false]);
     expect(session.getState()).toBe("ready");
+  });
+
+  it("refreshes typing while a turn is running and stops after cleanup", async () => {
+    const typing: boolean[] = [];
+    const { runtime, session } = setup({
+      broadcastTyping: async (value) => { typing.push(value); },
+      typingKeepaliveMs: 10,
+    });
+
+    const turnPromise = session.handleUserMessage(msgA("long task"));
+    await vi.waitFor(() => expect(typing.filter(Boolean).length).toBeGreaterThanOrEqual(2));
+
+    runtime.complete("done");
+    await turnPromise;
+    expect(typing.at(-1)).toBe(false);
+
+    const count = typing.length;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(typing).toHaveLength(count);
   });
 
   it("two consecutive turns on the same account work", async () => {
