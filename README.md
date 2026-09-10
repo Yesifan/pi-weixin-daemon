@@ -1,5 +1,8 @@
 # pi-wx（pi-weixin-daemon）
 
+> [!IMPORTANT]
+> 本项目已迁移至 [Yesifan/pi-packages](https://github.com/Yesifan/pi-packages)。此仓库已停止维护并归档，请前往新仓库获取最新代码、提交问题和参与开发。
+
 将腾讯微信 iLink Bot 与 [Pi Coding Agent](https://github.com/earendil-works/pi) 直接连接的守护进程。
 
 ```text
